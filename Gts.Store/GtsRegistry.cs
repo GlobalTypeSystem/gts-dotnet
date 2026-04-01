@@ -1,5 +1,8 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Gts.Extraction;
 using Gts.Store.InMemory;
+using Gts.Store.Validation;
 
 namespace Gts.Store;
 
@@ -44,6 +47,81 @@ public abstract class GtsRegistry
     public ValueTask<int> CountAsync()
     {
         return _store.CountAsync();
+    }
+
+    /// <summary>
+    /// Validates a stored instance against the JSON Schema for its resolved type (rightmost type in the id chain, or <c>type</c> for anonymous instances).
+    /// </summary>
+    /// <param name="instanceId">GTS instance id or opaque id (e.g. UUID).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask<GtsInstanceValidationResult> ValidateInstanceAsync(
+        string instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrWhiteSpace(instanceId))
+            return new GtsInstanceValidationResult { Ok = false, Id = instanceId };
+
+        var trimmed = instanceId.Trim();
+        var entity = await _store.GetByInstanceIdAsync(trimmed).ConfigureAwait(false);
+        if (entity is null)
+            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "InstanceNotFound" };
+
+        if (entity.IsSchema)
+            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "NotAnInstance" };
+
+        var extract = GtsJsonEntity.ExtractId(entity.Content);
+        var schemaIdStr = extract.SchemaId;
+        if (string.IsNullOrEmpty(schemaIdStr) || !schemaIdStr.EndsWith('~'))
+            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "SchemaIdMissing" };
+
+        if (!GtsId.TryParse(schemaIdStr, out var schemaGtsId) || schemaGtsId is null || !schemaGtsId.IsType)
+            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "InvalidSchemaId" };
+
+        var schemaEntity = await _store.GetAsync(schemaGtsId).ConfigureAwait(false);
+        if (schemaEntity is null || !schemaEntity.IsSchema)
+            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "SchemaNotFound" };
+
+        var all = await _store.GetAllAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var normalizedMap = new Dictionary<GtsId, JsonObject>();
+        foreach (var e in all)
+        {
+            if (!e.IsSchema || e.GtsId is null)
+                continue;
+            normalizedMap[e.GtsId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(e.Content);
+        }
+
+        if (!normalizedMap.ContainsKey(schemaGtsId))
+            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "SchemaNotFound" };
+
+        JsonDocument instDoc;
+        try
+        {
+            instDoc = JsonDocument.Parse(entity.Content.ToJsonString());
+        }
+        catch (JsonException)
+        {
+            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "InvalidInstanceJson" };
+        }
+
+        using (instDoc)
+        {
+            var results = GtsJsonSchemaEvaluator.Evaluate(instDoc.RootElement, schemaGtsId, normalizedMap);
+
+            if (results.IsValid)
+                return new GtsInstanceValidationResult { Ok = true, Id = trimmed };
+
+            return new GtsInstanceValidationResult
+            {
+                Ok = false,
+                Id = trimmed,
+                FailureReason = "SchemaValidationFailed",
+                SchemaErrors = GtsJsonSchemaEvaluator.FlattenErrors(results)
+            };
+        }
     }
 
     /// <summary>Creates an in-memory registry (single-threaded).</summary>

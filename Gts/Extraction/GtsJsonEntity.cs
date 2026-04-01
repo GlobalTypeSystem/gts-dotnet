@@ -267,7 +267,7 @@ public sealed class GtsJsonEntity
         if (trimmed.Length == 0)
             return null;
 
-        if (propertyName == "$id" && trimmed.StartsWith(GtsUriPrefix, StringComparison.Ordinal))
+        if ((propertyName == "$id" || propertyName == "$$id") && trimmed.StartsWith(GtsUriPrefix, StringComparison.Ordinal))
             trimmed = trimmed.Substring(GtsUriPrefix.Length);
 
         return trimmed;
@@ -323,9 +323,11 @@ public sealed class GtsJsonEntity
     {
         if (node == null) return;
 
-        if (node is JsonValue value)
+        if (node is JsonValue value && value.GetValueKind() == JsonValueKind.String)
         {
             var str = value.GetValue<string>();
+            if (!string.IsNullOrEmpty(str) && str.StartsWith(GtsUriPrefix, StringComparison.Ordinal))
+                str = str[GtsUriPrefix.Length..];
 
             if (!string.IsNullOrEmpty(str) && IsValidGtsId(str))
             {

@@ -22,6 +22,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Gts\Gts.csproj" />
+      <ProjectReference Include="..\Gts.Store\Gts.Store.csproj" />
     </ItemGroup>
 
 </Project>

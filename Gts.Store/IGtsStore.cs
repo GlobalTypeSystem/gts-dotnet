@@ -10,6 +10,11 @@ public interface IGtsStore
     
     /// <summary>Retrieves an entity by GTS ID, or null if not found.</summary>
     ValueTask<GtsJsonEntity?> GetAsync(GtsId id);
+
+    /// <summary>
+    /// Looks up an instance by GTS instance id or by an opaque id (e.g. UUID for anonymous instances).
+    /// </summary>
+    ValueTask<GtsJsonEntity?> GetByInstanceIdAsync(string instanceId);
     
     /// <summary>Returns all stored entities.</summary>
     ValueTask<IList<GtsJsonEntity>> GetAllAsync();
