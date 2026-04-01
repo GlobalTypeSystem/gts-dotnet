@@ -13,7 +13,7 @@ Featureset:
 - [x] **OP#3 - ID Parsing**: Decompose identifiers into constituent parts (vendor, package, namespace, type, version, etc.)
 - [x] **OP#4 - ID Pattern Matching**: Match identifiers against patterns containing wildcards
 - [x] **OP#5 - ID to UUID Mapping**: Generate deterministic UUIDs from GTS identifiers
-- [ ] **OP#6 - Instance Validation**: Validate object instances against their corresponding schemas
+- [x] **OP#6 - Instance Validation**: Validate object instances against their corresponding schemas
 - [ ] **OP#7 - Relationship Resolution**: Load all schemas and instances, resolve inter-dependencies, and detect broken references
 - [ ] **OP#8 - Compatibility Checking**: Verify that schemas with different MINOR versions are compatible
 - [ ] **OP#8.1 - Backward compatibility checking**
@@ -116,5 +116,21 @@ Generate a deterministic UUID v5 from a GTS identifier. The same ID always yield
 ```csharp
 var id = GtsId.Parse("gts.acme.order.ns.invoice.v1.0");
 Guid uuid = id.ToGuid();  // deterministic: same ID → same UUID every time
+```
+
+### OP#6 - Instance Validation
+
+Validate stored JSON instances against Draft 07 JSON Schemas registered in the same `GtsRegistry`, including `gts://` `$ref` between schemas and GTS `$$id` / `$$ref` / `$$schema` keywords on schema documents.
+
+- **ValidateInstanceAsync(instanceId)** — loads the instance (by GTS instance id or opaque id such as a UUID), resolves its type (chained instance id or `type` field), fetches the schema from the store, and evaluates the instance with [JsonSchema.Net](https://www.nuget.org/packages/JsonSchema.Net). Returns `GtsInstanceValidationResult` with `Ok`, `Id`, `FailureReason`, and optional `SchemaErrors`.
+
+```csharp
+using Gts.Extraction;
+using Gts.Store;
+
+var registry = GtsRegistry.InMemory(new GtsRegistryConfig(false));
+// Save schemas (JSON Schema with $id or $$id) and instances via SaveAsync(GtsJsonEntity.ExtractEntity(...))
+var result = await registry.ValidateInstanceAsync("gts.vendor.pkg.ns.type.v1~x._.myinst.v1");
+// result.Ok, result.FailureReason, result.SchemaErrors
 ```
 
