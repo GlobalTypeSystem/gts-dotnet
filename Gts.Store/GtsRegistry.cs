@@ -124,6 +124,20 @@ public abstract class GtsRegistry
         }
     }
 
+    /// <summary>
+    /// Loads every stored entity, walks GTS references in each document, and reports references that do not
+    /// resolve to another stored schema (type id) or instance. Pattern identifiers are ignored.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask<GtsRelationshipResolutionResult> ResolveRelationshipsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var all = await _store.GetAllAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return GtsRelationshipResolver.Analyze(all);
+    }
+
     /// <summary>Creates an in-memory registry (single-threaded).</summary>
     public static GtsRegistry InMemory(GtsRegistryConfig config)
     {

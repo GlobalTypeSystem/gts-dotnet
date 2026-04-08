@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using Gts.Extraction;
 
 namespace Gts.Store.InMemory;
@@ -51,12 +52,23 @@ internal class InMemoryGtsStore<T> : IGtsStore
     /// <inheritdoc/>
     public ValueTask<IList<GtsJsonEntity>> GetAllAsync()
     {
-        return ValueTask.FromResult<IList<GtsJsonEntity>>(_entities.Values.ToArray());
+        var seen = new HashSet<GtsJsonEntity>(ReferenceEqualityComparer.Instance);
+        var list = new List<GtsJsonEntity>();
+        foreach (var e in _instanceKeys.Values)
+        {
+            if (seen.Add(e))
+                list.Add(e);
+        }
+
+        return ValueTask.FromResult<IList<GtsJsonEntity>>(list);
     }
 
     /// <inheritdoc/>
     public ValueTask<int> CountAsync()
     {
-        return ValueTask.FromResult(_entities.Count);
+        var seen = new HashSet<GtsJsonEntity>(ReferenceEqualityComparer.Instance);
+        foreach (var e in _instanceKeys.Values)
+            seen.Add(e);
+        return ValueTask.FromResult(seen.Count);
     }
 }
