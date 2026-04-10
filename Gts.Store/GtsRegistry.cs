@@ -138,6 +138,20 @@ public abstract class GtsRegistry
         return GtsRelationshipResolver.Analyze(all);
     }
 
+    /// <summary>
+    /// Verifies <strong>full</strong> compatibility between stored schemas whose GTS type ids differ only in the
+    /// last segment's minor version: after normalizing Draft-07 and GTS URIs, the schema trees must be identical.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask<GtsMinorVersionCompatibilityReport> CheckMinorVersionCompatibilityAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var all = await _store.GetAllAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return GtsSchemaMinorVersionCompatibility.AnalyzeStoredSchemas(all);
+    }
+
     /// <summary>Creates an in-memory registry (single-threaded).</summary>
     public static GtsRegistry InMemory(GtsRegistryConfig config)
     {

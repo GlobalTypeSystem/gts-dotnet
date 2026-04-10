@@ -16,7 +16,7 @@ public interface IGtsStore
     /// </summary>
     ValueTask<GtsJsonEntity?> GetByInstanceIdAsync(string instanceId);
     
-    /// <summary>Returns all stored entities.</summary>
+    /// <summary>Returns all stored entities, including instances without a <see cref="GtsJsonEntity.GtsId"/> (e.g. opaque ids).</summary>
     ValueTask<IList<GtsJsonEntity>> GetAllAsync();
     
     /// <summary>Returns the number of stored entities.</summary>
