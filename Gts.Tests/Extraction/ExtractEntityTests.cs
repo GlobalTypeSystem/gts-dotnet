@@ -68,4 +68,21 @@ public class ExtractEntityTests
         Assert.Contains(entity.GtsRefs,
             r => r is { Id: "gts.x.test.core.item.v1~", SourcePath: "items[0].$ref" });
     }
+
+    [Fact]
+    public void ExtractingPopulatesRefsFromDoubleDollarRefInAllOf()
+    {
+        var json = """
+            {
+              "$$id": "gts://gts.x.test6.events.type.v1~x.test6.rel.missing_base.v1.0~",
+              "$$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "allOf": [ { "$$ref": "gts://gts.x.test6.events.type.v1~" } ]
+            }
+            """;
+
+        var entity = GtsJsonEntity.ExtractEntity(JsonNode.Parse(json)!.AsObject());
+
+        Assert.Contains(entity.GtsRefs, r => r.Id == "gts.x.test6.events.type.v1~");
+    }
 }
