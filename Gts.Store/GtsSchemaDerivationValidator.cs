@@ -51,7 +51,7 @@ public static class GtsSchemaDerivationValidator
     /// <summary>Strips the last <c>~segment</c> from a chained type id, or returns null for a single-segment base.</summary>
     public static string? GetParentTypeId(string schemaTypeId)
     {
-        if (string.IsNullOrEmpty(schemaTypeId) || !schemaTypeId.EndsWith('~', StringComparison.Ordinal))
+        if (string.IsNullOrEmpty(schemaTypeId) || !schemaTypeId.EndsWith("~", StringComparison.Ordinal))
             return null;
 
         var withoutTrailing = schemaTypeId.AsSpan(0, schemaTypeId.Length - 1);

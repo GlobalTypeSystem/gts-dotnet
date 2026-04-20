@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Gts;
 using Gts.Extraction;
 using Gts.Store;
 using Gts.Store.Validation;
@@ -269,7 +270,7 @@ app.MapPost("/validate-entity", async (HttpRequest req) =>
     if (!body.TryGetPropertyValue("entity_id", out var eid) || eid is not JsonValue ev || !ev.TryGetValue<string>(out var entityId))
         return Results.Json(new { id = "", ok = false, error = "entity_id required" });
 
-    if (entityId.EndsWith('~', StringComparison.Ordinal))
+    if (entityId.EndsWith("~", StringComparison.Ordinal))
         return await ValidateSchemaBody(entityId);
 
     var r = await registry.ValidateInstanceAsync(entityId);
@@ -318,7 +319,7 @@ app.MapGet("/compatibility", async (string old_schema_id, string new_schema_id) 
         return Results.Json(new
         {
             old = old_schema_id,
-            new = new_schema_id,
+            @new = new_schema_id,
             is_backward_compatible = false,
             is_forward_compatible = false,
             is_fully_compatible = false,
@@ -332,7 +333,7 @@ app.MapGet("/compatibility", async (string old_schema_id, string new_schema_id) 
         return Results.Json(new
         {
             old = old_schema_id,
-            new = new_schema_id,
+            @new = new_schema_id,
             is_backward_compatible = false,
             is_forward_compatible = false,
             is_fully_compatible = false,
@@ -348,7 +349,7 @@ app.MapGet("/compatibility", async (string old_schema_id, string new_schema_id) 
     return Results.Json(new
     {
         old = old_schema_id,
-        new = new_schema_id,
+        @new = new_schema_id,
         is_backward_compatible = backOk,
         is_forward_compatible = fwdOk,
         is_fully_compatible = backOk && fwdOk,
@@ -466,7 +467,7 @@ internal static class SegmentDto
     {
         vendor = s.Vendor,
         package = s.Package,
-        namespace = s.Namespace,
+        @namespace = s.Namespace,
         type = s.Type,
         ver_major = s.VersionMajor,
         ver_minor = s.VersionMinor,
@@ -640,7 +641,7 @@ internal static class QueryEngine
         var idx = expr.IndexOf('[');
         if (idx >= 0)
         {
-            if (!expr.EndsWith(']', StringComparison.Ordinal))
+            if (!expr.EndsWith("]", StringComparison.Ordinal))
                 return new QueryResult(new List<object>(), "Invalid query");
             basePart = expr[..idx].Trim();
             filterPart = expr[(idx + 1)..^1];

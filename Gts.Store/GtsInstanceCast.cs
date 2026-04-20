@@ -10,7 +10,7 @@ public static class GtsInstanceCast
     public static JsonObject CastToEffectiveSchema(JsonObject instance, JsonObject targetEffective)
     {
         var result = (JsonObject)instance.DeepClone()!;
-        _ = CastObject(result, targetEffective, "");
+        CastObject(result, targetEffective, "");
         return result;
     }
 

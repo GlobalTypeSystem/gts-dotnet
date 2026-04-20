@@ -37,6 +37,14 @@ public abstract class GtsRegistry
         return _store.GetAsync(id);
     }
 
+    /// <summary>
+    /// Looks up an instance by GTS instance id or by an opaque id (e.g. UUID for anonymous instances).
+    /// </summary>
+    public ValueTask<GtsJsonEntity?> GetByInstanceIdAsync(string instanceId)
+    {
+        return _store.GetByInstanceIdAsync(instanceId);
+    }
+
     /// <summary>Returns all entities in the registry.</summary>
     public ValueTask<IList<GtsJsonEntity>> GetAllAsync()
     {
@@ -150,6 +158,43 @@ public abstract class GtsRegistry
         var all = await _store.GetAllAsync().ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         return GtsSchemaMinorVersionCompatibility.AnalyzeStoredSchemas(all);
+    }
+
+    /// <summary>
+    /// Loads two schema entities and compares them for structural minor compatibility and JSON Schema evolution
+    /// (backward / forward), ordered by last-segment minor version.
+    /// </summary>
+    /// <param name="schemaIdA">First schema type id.</param>
+    /// <param name="schemaIdB">Second schema type id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask<GtsMinorVersionPairComparison> CompareMinorVersionSchemasAsync(
+        GtsId schemaIdA,
+        GtsId schemaIdB,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(schemaIdA);
+        ArgumentNullException.ThrowIfNull(schemaIdB);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var a = await GetAsync(schemaIdA).ConfigureAwait(false);
+        var b = await GetAsync(schemaIdB).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (a is null || b is null || !a.IsSchema || !b.IsSchema)
+        {
+            return new GtsMinorVersionPairComparison
+            {
+                AreMinorVariantPair = false,
+                IsStructurallyCompatible = false,
+                StructuralIncompatibilityReason = "One or both schemas are missing or not schema documents.",
+                IsBackwardEvolutionCompatible = false,
+                BackwardEvolutionErrors = new[] { "Evolution checks require two stored schema entities." },
+                IsForwardEvolutionCompatible = false,
+                ForwardEvolutionErrors = new[] { "Evolution checks require two stored schema entities." }
+            };
+        }
+
+        return GtsSchemaMinorVersionCompatibility.ComparePair(schemaIdA, a.Content, schemaIdB, b.Content);
     }
 
     /// <summary>Creates an in-memory registry (single-threaded).</summary>

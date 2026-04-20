@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Gts;
 using Gts.Extraction;
 using Gts.Store;
 
@@ -34,7 +35,7 @@ public class MinorVersionCompatibilityTests
     {
         const string s1 = """
             {
-              "$$id": "gts://gts.x.compat.demo.ns.widget.v1.0~",
+              "$$id": "gts://gts.x.compat.demo.widget.v1.0~",
               "$$schema": "http://json-schema.org/draft-07/schema#",
               "type": "object",
               "required": ["name"],
@@ -46,7 +47,7 @@ public class MinorVersionCompatibilityTests
 
         const string s2 = """
             {
-              "$$id": "gts://gts.x.compat.demo.ns.widget.v1.1~",
+              "$$id": "gts://gts.x.compat.demo.widget.v1.1~",
               "$$schema": "http://json-schema.org/draft-07/schema#",
               "type": "object",
               "required": ["name"],
@@ -56,8 +57,8 @@ public class MinorVersionCompatibilityTests
             }
             """;
 
-        var id1 = GtsId.Parse("gts.x.compat.demo.ns.widget.v1.0~");
-        var id2 = GtsId.Parse("gts.x.compat.demo.ns.widget.v1.1~");
+        var id1 = GtsId.Parse("gts.x.compat.demo.widget.v1.0~");
+        var id2 = GtsId.Parse("gts.x.compat.demo.widget.v1.1~");
         var o1 = JsonNode.Parse(s1)!.AsObject();
         var o2 = JsonNode.Parse(s2)!.AsObject();
 
@@ -70,7 +71,7 @@ public class MinorVersionCompatibilityTests
     {
         const string s1 = """
             {
-              "$$id": "gts://gts.x.compat.demo.ns.item.v1.0~",
+              "$$id": "gts://gts.x.compat.demo.item.v1.0~",
               "$$schema": "http://json-schema.org/draft-07/schema#",
               "type": "object"
             }
@@ -78,15 +79,15 @@ public class MinorVersionCompatibilityTests
 
         const string s2 = """
             {
-              "$$id": "gts://gts.x.compat.demo.ns.item.v1.1~",
+              "$$id": "gts://gts.x.compat.demo.item.v1.1~",
               "$$schema": "http://json-schema.org/draft-07/schema#",
               "type": "object",
               "required": ["k"]
             }
             """;
 
-        var id1 = GtsId.Parse("gts.x.compat.demo.ns.item.v1.0~");
-        var id2 = GtsId.Parse("gts.x.compat.demo.ns.item.v1.1~");
+        var id1 = GtsId.Parse("gts.x.compat.demo.item.v1.0~");
+        var id2 = GtsId.Parse("gts.x.compat.demo.item.v1.1~");
 
         var result = GtsSchemaMinorVersionCompatibility.CompareSchemas(
             id1,
@@ -103,7 +104,7 @@ public class MinorVersionCompatibilityTests
     {
         const string s1 = """
             {
-              "$$id": "gts://gts.x.compat.reg.ns.doc.v1.0~",
+              "$$id": "gts://gts.x.compat.demo.doc.v1.0~",
               "$$schema": "http://json-schema.org/draft-07/schema#",
               "type": "object"
             }
@@ -111,7 +112,7 @@ public class MinorVersionCompatibilityTests
 
         const string s2 = """
             {
-              "$$id": "gts://gts.x.compat.reg.ns.doc.v1.1~",
+              "$$id": "gts://gts.x.compat.demo.doc.v1.1~",
               "$$schema": "http://json-schema.org/draft-07/schema#",
               "type": "object",
               "required": ["x"]
@@ -128,7 +129,46 @@ public class MinorVersionCompatibilityTests
         Assert.False(report.AreAllCompatible);
         var issue = Assert.Single(report.IncompatiblePairs);
         var ids = new[] { issue.SchemaIdA.Id, issue.SchemaIdB.Id };
-        Assert.True(ids.Any(id => id.Contains("v1.0", StringComparison.Ordinal)));
-        Assert.True(ids.Any(id => id.Contains("v1.1", StringComparison.Ordinal)));
+        Assert.Contains(ids, id => id.Contains("v1.0", StringComparison.Ordinal));
+        Assert.Contains(ids, id => id.Contains("v1.1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CompareMinorVersionSchemasAsync_reports_structural_and_evolution_for_pair()
+    {
+        const string s1 = """
+            {
+              "$$id": "gts://gts.x.compat.demo.pair.v1.0~",
+              "$$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "required": ["a"],
+              "properties": { "a": { "type": "string" } }
+            }
+            """;
+
+        const string s2 = """
+            {
+              "$$id": "gts://gts.x.compat.demo.pair.v1.1~",
+              "$$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "required": ["a"],
+              "properties": { "a": { "type": "string" } }
+            }
+            """;
+
+        var registry = GtsRegistry.InMemory(new GtsRegistryConfig(false));
+        await registry.SaveAsync(GtsJsonEntity.ExtractEntity(JsonNode.Parse(s1)!.AsObject()));
+        await registry.SaveAsync(GtsJsonEntity.ExtractEntity(JsonNode.Parse(s2)!.AsObject()));
+
+        var id0 = GtsId.Parse("gts.x.compat.demo.pair.v1.0~");
+        var id1 = GtsId.Parse("gts.x.compat.demo.pair.v1.1~");
+        var cmp = await registry.CompareMinorVersionSchemasAsync(id0, id1);
+
+        Assert.True(cmp.AreMinorVariantPair);
+        Assert.Equal(id0.Id, cmp.OlderSchemaId!.Id);
+        Assert.Equal(id1.Id, cmp.NewerSchemaId!.Id);
+        Assert.True(cmp.IsStructurallyCompatible);
+        Assert.True(cmp.IsBackwardEvolutionCompatible);
+        Assert.True(cmp.IsForwardEvolutionCompatible);
     }
 }

@@ -15,7 +15,7 @@ public static class GtsSchemaRefFormatValidator
                 if (obj.TryGetPropertyValue("$ref", out var r) && r is JsonValue rv && rv.TryGetValue<string>(out var refUri))
                 {
                     var currentPath = string.IsNullOrEmpty(path) ? "$ref" : path + ".$ref";
-                    if (refUri.StartsWith('#', StringComparison.Ordinal))
+                    if (refUri.StartsWith("#", StringComparison.Ordinal))
                     {
                         // local ref OK
                     }

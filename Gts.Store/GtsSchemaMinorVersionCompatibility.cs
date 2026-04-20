@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json.Nodes;
 using Gts.Extraction;
 using Gts.Store.Validation;
@@ -56,6 +57,89 @@ public static class GtsSchemaMinorVersionCompatibility
             Reason =
                 "Schemas differ after normalizing minor versions in identifiers (not fully compatible under the same validation semantics)."
         };
+    }
+
+    /// <summary>
+    /// Compares two schema documents for structural (normalized identity) compatibility and for JSON Schema
+    /// evolution rules: backward (old instances remain valid under the newer schema) and forward
+    /// (newer instances remain valid under the older schema), using the lower minor as &quot;old&quot; and the higher as &quot;new&quot;.
+    /// </summary>
+    public static GtsMinorVersionPairComparison ComparePair(
+        GtsId idA,
+        JsonObject schemaA,
+        GtsId idB,
+        JsonObject schemaB)
+    {
+        ArgumentNullException.ThrowIfNull(idA);
+        ArgumentNullException.ThrowIfNull(idB);
+        ArgumentNullException.ThrowIfNull(schemaA);
+        ArgumentNullException.ThrowIfNull(schemaB);
+
+        var structural = CompareSchemas(idA, schemaA, idB, schemaB);
+
+        if (!idA.IsType || !idB.IsType || !GtsTypeFamily.AreSameLogicalTypeMinorVariants(idA, idB))
+        {
+            return new GtsMinorVersionPairComparison
+            {
+                AreMinorVariantPair = false,
+                IsStructurallyCompatible = structural.AreCompatible,
+                StructuralIncompatibilityReason = structural.Reason,
+                IsBackwardEvolutionCompatible = false,
+                BackwardEvolutionErrors = new[] { "Not a minor-variant type pair; evolution checks were not run." },
+                IsForwardEvolutionCompatible = false,
+                ForwardEvolutionErrors = new[] { "Not a minor-variant type pair; evolution checks were not run." }
+            };
+        }
+
+        OrderByLastMinor(idA, schemaA, idB, schemaB, out var olderId, out var olderSchema, out var newerId, out var newerSchema);
+
+        var oldFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(olderSchema);
+        var newFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(newerSchema);
+        var (backOk, backErr) = GtsJsonSchemaEvolutionCompatibility.CheckBackward(oldFlat, newFlat);
+        var (fwdOk, fwdErr) = GtsJsonSchemaEvolutionCompatibility.CheckForward(oldFlat, newFlat);
+
+        return new GtsMinorVersionPairComparison
+        {
+            AreMinorVariantPair = true,
+            OlderSchemaId = olderId,
+            NewerSchemaId = newerId,
+            IsStructurallyCompatible = structural.AreCompatible,
+            StructuralIncompatibilityReason = structural.Reason,
+            IsBackwardEvolutionCompatible = backOk,
+            BackwardEvolutionErrors = backErr,
+            IsForwardEvolutionCompatible = fwdOk,
+            ForwardEvolutionErrors = fwdErr
+        };
+    }
+
+    private static void OrderByLastMinor(
+        GtsId idA,
+        JsonObject schemaA,
+        GtsId idB,
+        JsonObject schemaB,
+        out GtsId olderId,
+        out JsonObject olderSchema,
+        out GtsId newerId,
+        out JsonObject newerSchema)
+    {
+        var aLast = idA.Segments.Last();
+        var bLast = idB.Segments.Last();
+        var am = aLast.VersionMinor!.Value;
+        var bm = bLast.VersionMinor!.Value;
+        if (am <= bm)
+        {
+            olderId = idA;
+            olderSchema = schemaA;
+            newerId = idB;
+            newerSchema = schemaB;
+        }
+        else
+        {
+            olderId = idB;
+            olderSchema = schemaB;
+            newerId = idA;
+            newerSchema = schemaA;
+        }
     }
 
     /// <summary>
@@ -150,4 +234,41 @@ public sealed class GtsMinorVersionPairIssue
 
     /// <summary>Why the pair failed full compatibility.</summary>
     public required string Reason { get; init; }
+}
+
+/// <summary>
+/// Result of comparing two schemas for structural minor compatibility and optional evolution (backward / forward) rules.
+/// </summary>
+public sealed class GtsMinorVersionPairComparison
+{
+    /// <summary>True when both ids are type ids in the same minor-evolution family.</summary>
+    public required bool AreMinorVariantPair { get; init; }
+
+    /// <summary>When <see cref="AreMinorVariantPair"/> is true, the lower-minor schema id (evolution &quot;old&quot;).</summary>
+    public GtsId? OlderSchemaId { get; init; }
+
+    /// <summary>When <see cref="AreMinorVariantPair"/> is true, the higher-minor schema id (evolution &quot;new&quot;).</summary>
+    public GtsId? NewerSchemaId { get; init; }
+
+    /// <summary>True when normalized schema trees match (strictest notion of minor compatibility).</summary>
+    public required bool IsStructurallyCompatible { get; init; }
+
+    /// <summary>When <see cref="IsStructurallyCompatible"/> is false, a short explanation.</summary>
+    public string? StructuralIncompatibilityReason { get; init; }
+
+    /// <summary>Backward evolution: data valid under the older schema validates against the newer schema.</summary>
+    public required bool IsBackwardEvolutionCompatible { get; init; }
+
+    /// <summary>Messages from backward evolution analysis.</summary>
+    public required IReadOnlyList<string> BackwardEvolutionErrors { get; init; }
+
+    /// <summary>Forward evolution: data valid under the newer schema validates against the older schema.</summary>
+    public required bool IsForwardEvolutionCompatible { get; init; }
+
+    /// <summary>Messages from forward evolution analysis.</summary>
+    public required IReadOnlyList<string> ForwardEvolutionErrors { get; init; }
+
+    /// <summary>True when both evolution directions pass (weaker than <see cref="IsStructurallyCompatible"/>).</summary>
+    public bool IsEvolutionFullyCompatible =>
+        IsBackwardEvolutionCompatible && IsForwardEvolutionCompatible;
 }
