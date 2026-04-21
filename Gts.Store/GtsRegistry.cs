@@ -197,6 +197,232 @@ public abstract class GtsRegistry
         return GtsSchemaMinorVersionCompatibility.ComparePair(schemaIdA, a.Content, schemaIdB, b.Content);
     }
 
+    /// <summary>
+    /// Transforms a stored instance toward a target type id that is a <strong>minor</strong> variant of the instance&apos;s
+    /// schema (same GTS type family). Fills defaults, updates GTS id <c>const</c> fields, prunes when
+    /// <c>additionalProperties</c> is false, then validates against the target schema with GTS <c>const</c> tolerance.
+    /// </summary>
+    /// <param name="instanceId">GTS instance id or opaque id (e.g. UUID).</param>
+    /// <param name="toSchemaId">Target schema type id (trailing <c>~</c>).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask<GtsInstanceCastResult> CastInstanceAsync(
+        string instanceId,
+        GtsId toSchemaId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(instanceId))
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = instanceId,
+                FailureReason = "InvalidInstanceId"
+            };
+        }
+
+        ArgumentNullException.ThrowIfNull(toSchemaId);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var trimmed = instanceId.Trim();
+        var entity = await _store.GetByInstanceIdAsync(trimmed).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (entity is null)
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = trimmed,
+                ToSchemaId = toSchemaId,
+                FailureReason = "InstanceNotFound"
+            };
+        }
+
+        if (entity.IsSchema)
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = trimmed,
+                ToSchemaId = toSchemaId,
+                FailureReason = "NotAnInstance"
+            };
+        }
+
+        if (!toSchemaId.IsType)
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = trimmed,
+                ToSchemaId = toSchemaId,
+                FailureReason = "InvalidTargetSchemaId"
+            };
+        }
+
+        var toSchemaEntity = await _store.GetAsync(toSchemaId).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (toSchemaEntity is null || !toSchemaEntity.IsSchema)
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = trimmed,
+                ToSchemaId = toSchemaId,
+                FailureReason = "TargetSchemaNotFound"
+            };
+        }
+
+        var extract = GtsJsonEntity.ExtractId(entity.Content);
+        var fromSchemaIdStr = extract.SchemaId;
+        if (string.IsNullOrEmpty(fromSchemaIdStr) || !GtsId.TryParse(fromSchemaIdStr, out var fromGid) || fromGid is null || !fromGid.IsType)
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = trimmed,
+                ToSchemaId = toSchemaId,
+                FailureReason = "SchemaIdMissing"
+            };
+        }
+
+        var fromSchemaEntity = await _store.GetAsync(fromGid).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (fromSchemaEntity is null || !fromSchemaEntity.IsSchema)
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = trimmed,
+                FromSchemaId = fromGid,
+                ToSchemaId = toSchemaId,
+                FailureReason = "SourceSchemaNotFound"
+            };
+        }
+
+        var comparison = GtsSchemaMinorVersionCompatibility.ComparePair(
+            fromGid,
+            fromSchemaEntity.Content,
+            toSchemaId,
+            toSchemaEntity.Content);
+
+        if (!comparison.AreMinorVariantPair || !EvolutionAllowsCast(fromGid, toSchemaId, comparison))
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = trimmed,
+                FromSchemaId = fromGid,
+                ToSchemaId = toSchemaId,
+                FailureReason = !comparison.AreMinorVariantPair ? "NotMinorVariantPair" : "IncompatibleMinorEvolution",
+                Comparison = comparison
+            };
+        }
+
+        var targetFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(toSchemaEntity.Content);
+        var casted = GtsInstanceCast.CastToEffectiveSchema(entity.Content, targetFlat);
+
+        var all = await _store.GetAllAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var normalizedMap = new Dictionary<GtsId, JsonObject>();
+        foreach (var e in all)
+        {
+            if (!e.IsSchema || e.GtsId is null)
+                continue;
+            normalizedMap[e.GtsId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(e.Content);
+        }
+
+        if (!normalizedMap.ContainsKey(toSchemaId))
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = trimmed,
+                FromSchemaId = fromGid,
+                ToSchemaId = toSchemaId,
+                FailureReason = "SchemaNormalizationFailed",
+                Comparison = comparison,
+                CastedContent = casted
+            };
+        }
+
+        var tolerant = (JsonObject)GtsInstanceCast.RemoveGtsConstConstraints(
+            JsonNode.Parse(toSchemaEntity.Content.ToJsonString())!)!.AsObject();
+        normalizedMap[toSchemaId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(tolerant);
+
+        JsonDocument instDoc;
+        try
+        {
+            instDoc = JsonDocument.Parse(casted.ToJsonString());
+        }
+        catch (JsonException)
+        {
+            return new GtsInstanceCastResult
+            {
+                Ok = false,
+                InstanceId = trimmed,
+                FromSchemaId = fromGid,
+                ToSchemaId = toSchemaId,
+                FailureReason = "InvalidCastedJson",
+                Comparison = comparison,
+                CastedContent = casted
+            };
+        }
+
+        using (instDoc)
+        {
+            var eval = GtsJsonSchemaEvaluator.Evaluate(instDoc.RootElement, toSchemaId, normalizedMap);
+            if (!eval.IsValid)
+            {
+                return new GtsInstanceCastResult
+                {
+                    Ok = false,
+                    InstanceId = trimmed,
+                    FromSchemaId = fromGid,
+                    ToSchemaId = toSchemaId,
+                    FailureReason = "CastValidationFailed",
+                    Comparison = comparison,
+                    CastedContent = casted,
+                    SchemaValidationErrors = GtsJsonSchemaEvaluator.FlattenErrors(eval)
+                };
+            }
+        }
+
+        return new GtsInstanceCastResult
+        {
+            Ok = true,
+            InstanceId = trimmed,
+            FromSchemaId = fromGid,
+            ToSchemaId = toSchemaId,
+            CastedContent = casted,
+            Comparison = comparison
+        };
+    }
+
+    private static bool EvolutionAllowsCast(GtsId fromSchemaId, GtsId toSchemaId, GtsMinorVersionPairComparison cmp)
+    {
+        if (!cmp.AreMinorVariantPair || cmp.OlderSchemaId is null || cmp.NewerSchemaId is null)
+            return false;
+
+        if (string.Equals(fromSchemaId.Id, toSchemaId.Id, StringComparison.Ordinal))
+            return true;
+
+        var fromIsOlder = string.Equals(fromSchemaId.Id, cmp.OlderSchemaId.Id, StringComparison.Ordinal);
+        var toIsNewer = string.Equals(toSchemaId.Id, cmp.NewerSchemaId.Id, StringComparison.Ordinal);
+        if (fromIsOlder && toIsNewer)
+            return cmp.IsBackwardEvolutionCompatible;
+
+        var fromIsNewer = string.Equals(fromSchemaId.Id, cmp.NewerSchemaId.Id, StringComparison.Ordinal);
+        var toIsOlder = string.Equals(toSchemaId.Id, cmp.OlderSchemaId.Id, StringComparison.Ordinal);
+        if (fromIsNewer && toIsOlder)
+            return cmp.IsForwardEvolutionCompatible;
+
+        return false;
+    }
+
     /// <summary>Creates an in-memory registry (single-threaded).</summary>
     public static GtsRegistry InMemory(GtsRegistryConfig config)
     {

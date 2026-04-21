@@ -3,7 +3,6 @@ using System.Text.Json.Nodes;
 using Gts;
 using Gts.Extraction;
 using Gts.Store;
-using Gts.Store.Validation;
 
 namespace Gts.Application;
 
@@ -378,55 +377,33 @@ public static class GtsHttpApiExtensions
             if (!body.TryGetPropertyValue("to_schema_id", out var t) || t is not JsonValue tv || !tv.TryGetValue<string>(out var toSchemaId))
                 return Results.Json(new { error = "to_schema_id required" });
 
-            var fromEntity = await registry.GetByInstanceIdAsync(instanceId).ConfigureAwait(false);
-            if (fromEntity is null)
-                return Results.Json(new { error = "Instance not found" });
-            if (fromEntity.IsSchema)
-                return Results.Json(new { error = "Source must be an instance (must be an instance)" });
-
             if (!GtsId.TryParse(toSchemaId, out var toGid) || toGid is null || !toGid.IsType)
                 return Results.Json(new { error = "Invalid target schema id" });
 
-            var toSchemaEntity = await registry.GetAsync(toGid).ConfigureAwait(false);
-            if (toSchemaEntity is null || !toSchemaEntity.IsSchema)
-                return Results.Json(new { error = "Target schema not found" });
-
-            var extract = GtsJsonEntity.ExtractId(fromEntity.Content);
-            var fromSchemaIdStr = extract.SchemaId;
-            if (string.IsNullOrEmpty(fromSchemaIdStr) || !GtsId.TryParse(fromSchemaIdStr, out var fromGid) || fromGid is null)
-                return Results.Json(new { error = "Source schema not found" });
-
-            var fromSchemaEntity = await registry.GetAsync(fromGid).ConfigureAwait(false);
-            if (fromSchemaEntity is null || !fromSchemaEntity.IsSchema)
-                return Results.Json(new { error = "Source schema not found" });
-
-            var targetFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(toSchemaEntity.Content);
-            var casted = GtsInstanceCast.CastToEffectiveSchema(fromEntity.Content, targetFlat);
-
-            var all = await registry.GetAllAsync().ConfigureAwait(false);
-            var normalizedMap = new Dictionary<GtsId, JsonObject>();
-            foreach (var e in all)
+            var result = await registry.CastInstanceAsync(instanceId, toGid).ConfigureAwait(false);
+            if (!result.Ok)
             {
-                if (e.IsSchema && e.GtsId is not null)
-                    normalizedMap[e.GtsId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(e.Content);
+                return Results.Json(new
+                {
+                    error = result.FailureReason,
+                    instance_id = result.InstanceId,
+                    from_schema_id = result.FromSchemaId?.Id,
+                    to_schema_id = result.ToSchemaId?.Id,
+                    schema_validation_errors = result.SchemaValidationErrors,
+                    casted_entity = result.CastedContent is null ? null : JsonNode.Parse(result.CastedContent.ToJsonString()),
+                    are_minor_variant_pair = result.Comparison?.AreMinorVariantPair,
+                    is_structurally_compatible = result.Comparison?.IsStructurallyCompatible,
+                    is_backward_compatible = result.Comparison?.IsBackwardEvolutionCompatible,
+                    is_forward_compatible = result.Comparison?.IsForwardEvolutionCompatible
+                });
             }
-
-            if (!normalizedMap.ContainsKey(toGid))
-                return Results.Json(new { error = "Schema normalization failed" });
-
-            var tolerant = (JsonObject)GtsInstanceCast.RemoveGtsConstConstraints(JsonNode.Parse(toSchemaEntity.Content.ToJsonString())!)!.AsObject();
-            normalizedMap[toGid] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(tolerant);
-
-            using var doc = JsonDocument.Parse(casted.ToJsonString());
-            var eval = GtsJsonSchemaEvaluator.Evaluate(doc.RootElement, toGid, normalizedMap);
-            if (!eval.IsValid)
-                return Results.Json(new { error = "Cast result failed schema validation", casted_entity = JsonNode.Parse(casted.ToJsonString()) });
 
             return Results.Json(new
             {
-                casted_entity = JsonNode.Parse(casted.ToJsonString()),
-                is_backward_compatible = true,
-                is_forward_compatible = true
+                casted_entity = JsonNode.Parse(result.CastedContent!.ToJsonString()),
+                is_backward_compatible = result.Comparison!.IsBackwardEvolutionCompatible,
+                is_forward_compatible = result.Comparison.IsForwardEvolutionCompatible,
+                is_structurally_compatible = result.Comparison.IsStructurallyCompatible
             });
         });
 

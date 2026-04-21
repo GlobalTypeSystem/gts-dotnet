@@ -7,7 +7,6 @@ using Gts;
 using Gts.Application;
 using Gts.Extraction;
 using Gts.Store;
-using Gts.Store.Validation;
 using Microsoft.AspNetCore.Builder;
 
 static class Program
@@ -521,80 +520,42 @@ Examples:
         }
 
         var reg = await CreateRegistryAsync().ConfigureAwait(false);
-        var fromEntity = await reg.GetByInstanceIdAsync(fromId).ConfigureAwait(false);
-        if (fromEntity is null)
-        {
-            WriteJson(new { error = "Instance not found" });
-            return 1;
-        }
-
-        if (fromEntity.IsSchema)
-        {
-            WriteJson(new { error = "Source must be an instance (must be an instance)" });
-            return 1;
-        }
-
         if (!GtsId.TryParse(toSchemaId, out var toGid) || toGid is null || !toGid.IsType)
         {
             WriteJson(new { error = "Invalid target schema id" });
             return 1;
         }
 
-        var toSchemaEntity = await reg.GetAsync(toGid).ConfigureAwait(false);
-        if (toSchemaEntity is null || !toSchemaEntity.IsSchema)
+        var result = await reg.CastInstanceAsync(fromId, toGid).ConfigureAwait(false);
+        if (!result.Ok)
         {
-            WriteJson(new { error = "Target schema not found" });
-            return 1;
-        }
-
-        var extract = GtsJsonEntity.ExtractId(fromEntity.Content);
-        var fromSchemaIdStr = extract.SchemaId;
-        if (string.IsNullOrEmpty(fromSchemaIdStr) || !GtsId.TryParse(fromSchemaIdStr, out var fromGid) || fromGid is null)
-        {
-            WriteJson(new { error = "Source schema not found" });
-            return 1;
-        }
-
-        var fromSchemaEntity = await reg.GetAsync(fromGid).ConfigureAwait(false);
-        if (fromSchemaEntity is null || !fromSchemaEntity.IsSchema)
-        {
-            WriteJson(new { error = "Source schema not found" });
-            return 1;
-        }
-
-        var targetFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(toSchemaEntity.Content);
-        var casted = GtsInstanceCast.CastToEffectiveSchema(fromEntity.Content, targetFlat);
-
-        var all = await reg.GetAllAsync().ConfigureAwait(false);
-        var normalizedMap = new Dictionary<GtsId, JsonObject>();
-        foreach (var e in all)
-        {
-            if (e.IsSchema && e.GtsId is not null)
-                normalizedMap[e.GtsId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(e.Content);
-        }
-
-        if (!normalizedMap.ContainsKey(toGid))
-        {
-            WriteJson(new { error = "Schema normalization failed" });
-            return 1;
-        }
-
-        var tolerant = (JsonObject)GtsInstanceCast.RemoveGtsConstConstraints(JsonNode.Parse(toSchemaEntity.Content.ToJsonString())!)!.AsObject();
-        normalizedMap[toGid] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(tolerant);
-
-        using var doc = JsonDocument.Parse(casted.ToJsonString());
-        var eval = GtsJsonSchemaEvaluator.Evaluate(doc.RootElement, toGid, normalizedMap);
-        if (!eval.IsValid)
-        {
-            WriteJson(new { error = "Cast result failed schema validation", casted_entity = JsonNode.Parse(casted.ToJsonString()) });
+            WriteJson(new
+            {
+                error = result.FailureReason,
+                instance_id = result.InstanceId,
+                from_schema_id = result.FromSchemaId?.Id,
+                to_schema_id = result.ToSchemaId?.Id,
+                schema_validation_errors = result.SchemaValidationErrors,
+                casted_entity = result.CastedContent is null ? null : JsonNode.Parse(result.CastedContent.ToJsonString()),
+                comparison = result.Comparison is null
+                    ? null
+                    : new
+                    {
+                        are_minor_variant_pair = result.Comparison.AreMinorVariantPair,
+                        is_structurally_compatible = result.Comparison.IsStructurallyCompatible,
+                        is_backward_compatible = result.Comparison.IsBackwardEvolutionCompatible,
+                        is_forward_compatible = result.Comparison.IsForwardEvolutionCompatible
+                    }
+            });
             return 1;
         }
 
         WriteJson(new
         {
-            casted_entity = JsonNode.Parse(casted.ToJsonString()),
-            is_backward_compatible = true,
-            is_forward_compatible = true
+            casted_entity = JsonNode.Parse(result.CastedContent!.ToJsonString()),
+            is_backward_compatible = result.Comparison!.IsBackwardEvolutionCompatible,
+            is_forward_compatible = result.Comparison.IsForwardEvolutionCompatible,
+            is_structurally_compatible = result.Comparison.IsStructurallyCompatible
         });
         return 0;
     }
