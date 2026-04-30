@@ -589,34 +589,23 @@ Examples:
         }
 
         var reg = await CreateRegistryAsync().ConfigureAwait(false);
-        var (gtsPart, pathPart) = GtsAttributeSelector.SplitGtsWithPath(pathArg);
-        if (pathPart is null || string.IsNullOrWhiteSpace(gtsPart))
+        var r = await reg.GetAttributeAsync(pathArg).ConfigureAwait(false);
+        if (!r.Resolved)
         {
-            WriteJson(new { resolved = false });
+            WriteJson(new { resolved = false, error = r.Error, available_fields = r.AvailableFields });
             return 0;
         }
 
-        if (!GtsId.TryParse(gtsPart.Trim(), out var gid) || gid is null)
-        {
-            WriteJson(new { resolved = false });
-            return 0;
-        }
-
-        var entity = await reg.GetAsync(gid).ConfigureAwait(false);
-        if (entity is null || !GtsAttributeSelector.TryResolve(entity.Content, pathPart, out var val))
-        {
-            WriteJson(new { resolved = false });
-            return 0;
-        }
-
-        object payload = val switch
+        object payload = r.Value switch
         {
             JsonValue jv when jv.TryGetValue<string>(out var s) => s,
             JsonValue jv when jv.TryGetValue<bool>(out var b) => b,
             JsonValue jv when jv.TryGetValue<int>(out var ni) => ni,
             JsonValue jv when jv.TryGetValue<double>(out var nd) => nd,
             JsonValue jv when jv.TryGetValue<decimal>(out var nm) => nm,
-            _ => JsonNode.Parse(val!.ToJsonString())!
+            JsonValue jv when jv.TryGetValue<long>(out var nl) => nl,
+            null => null!,
+            _ => JsonNode.Parse(r.Value!.ToJsonString())!
         };
         WriteJson(new { resolved = true, value = payload });
         return 0;

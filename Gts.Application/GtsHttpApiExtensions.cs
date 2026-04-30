@@ -418,23 +418,18 @@ public static class GtsHttpApiExtensions
 
         app.MapGet("/attr", async (string gts_with_path) =>
         {
-            var (gtsPart, pathPart) = GtsAttributeSelector.SplitGtsWithPath(gts_with_path);
-            if (pathPart is null)
-                return Results.Json(new { resolved = false });
+            var r = await registry.GetAttributeAsync(gts_with_path).ConfigureAwait(false);
+            if (!r.Resolved)
+            {
+                return Results.Json(new
+                {
+                    resolved = false,
+                    error = r.Error,
+                    available_fields = r.AvailableFields
+                });
+            }
 
-            if (string.IsNullOrWhiteSpace(gtsPart))
-                return Results.Json(new { resolved = false });
-
-            if (!GtsId.TryParse(gtsPart.Trim(), out var gid) || gid is null)
-                return Results.Json(new { resolved = false });
-
-            var entity = await registry.GetAsync(gid).ConfigureAwait(false);
-            if (entity is null)
-                return Results.Json(new { resolved = false });
-
-            if (!GtsAttributeSelector.TryResolve(entity.Content, pathPart, out var val))
-                return Results.Json(new { resolved = false });
-
+            var val = r.Value;
             return val switch
             {
                 JsonValue jv when jv.TryGetValue<string>(out var s) => Results.Json(new { resolved = true, value = s }),
@@ -442,7 +437,7 @@ public static class GtsHttpApiExtensions
                 JsonValue jv when jv.TryGetValue<int>(out var ni) => Results.Json(new { resolved = true, value = ni }),
                 JsonValue jv when jv.TryGetValue<double>(out var nd) => Results.Json(new { resolved = true, value = nd }),
                 JsonValue jv when jv.TryGetValue<decimal>(out var nm) => Results.Json(new { resolved = true, value = nm }),
-                _ => Results.Json(new { resolved = true, value = JsonNode.Parse(val!.ToJsonString()) })
+                _ => Results.Json(new { resolved = true, value = val is null ? null : JsonNode.Parse(val.ToJsonString()) })
             };
         });
 
