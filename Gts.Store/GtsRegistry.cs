@@ -58,6 +58,29 @@ public abstract class GtsRegistry
     }
 
     /// <summary>
+    /// Executes a GTS query expression over stored entities: exact or wildcard id pattern, optional JSON attribute filters (AND).
+    /// Limit is accepted when in the range 1–1000; otherwise 100 is used (same as <c>GET /query</c>).
+    /// </summary>
+    /// <param name="expr">Query string, e.g. <c>gts.vendor.pkg.*</c> or <c>gts.vendor.pkg.ns.type.v1~x._.inst.v1.0[status=active]</c>.</param>
+    /// <param name="limit">Maximum number of matching entity bodies to return.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask<GtsQueryExecutionResult> QueryAsync(
+        string expr,
+        int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var lim = GtsQuery.NormalizeLimit(limit);
+        if (!GtsQuery.TryParse(expr, out var parsed, out var parseError) || parsed is null)
+            return GtsQueryExecutionResult.Failed(lim, parseError ?? "Invalid query");
+
+        var all = await _store.GetAllAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        var results = GtsQuery.Execute(all, parsed, lim, cancellationToken);
+        return GtsQueryExecutionResult.Success(lim, results);
+    }
+
+    /// <summary>
     /// Validates a stored instance against the JSON Schema for its resolved type (rightmost type in the id chain, or <c>type</c> for anonymous instances).
     /// </summary>
     /// <param name="instanceId">GTS instance id or opaque id (e.g. UUID).</param>
