@@ -218,6 +218,143 @@ public abstract class GtsRegistry
     }
 
     /// <summary>
+    /// Validates a stored schema: <c>$ref</c> must be local (<c>#</c>) or <c>gts://</c>, and the schema must be
+    /// forward-compatible with each precedent type in its GTS id chain (immediate parent, then grandparent, …).
+    /// </summary>
+    /// <param name="schemaTypeId">GTS type id of the schema (trailing <c>~</c>).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask<GtsSchemaValidationResult> ValidateSchemaAsync(
+        string schemaTypeId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrWhiteSpace(schemaTypeId))
+        {
+            return new GtsSchemaValidationResult
+            {
+                Ok = false,
+                SchemaId = schemaTypeId,
+                FailureReason = "InvalidSchemaId"
+            };
+        }
+
+        var trimmed = schemaTypeId.Trim();
+        if (!GtsId.TryParse(trimmed, out var gid) || gid is null || !gid.IsType)
+        {
+            return new GtsSchemaValidationResult
+            {
+                Ok = false,
+                SchemaId = trimmed,
+                FailureReason = "InvalidSchemaId"
+            };
+        }
+
+        var entity = await _store.GetAsync(gid).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (entity is null)
+        {
+            return new GtsSchemaValidationResult
+            {
+                Ok = false,
+                SchemaId = trimmed,
+                FailureReason = "SchemaNotFound"
+            };
+        }
+
+        if (!entity.IsSchema)
+        {
+            return new GtsSchemaValidationResult
+            {
+                Ok = false,
+                SchemaId = trimmed,
+                FailureReason = "NotASchema"
+            };
+        }
+
+        return await ValidateSchemaAsync(gid, entity.Content, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Validates a schema document for a GTS type id using stored precedent schemas only (the document itself need not be in the registry).
+    /// </summary>
+    /// <param name="schemaTypeId">GTS type id this document defines (trailing <c>~</c>).</param>
+    /// <param name="schemaDocument">JSON Schema body (e.g. from extraction).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask<GtsSchemaValidationResult> ValidateSchemaAsync(
+        GtsId schemaTypeId,
+        JsonObject schemaDocument,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(schemaTypeId);
+        ArgumentNullException.ThrowIfNull(schemaDocument);
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!schemaTypeId.IsType)
+        {
+            return new GtsSchemaValidationResult
+            {
+                Ok = false,
+                SchemaId = schemaTypeId.Id,
+                FailureReason = "InvalidSchemaId"
+            };
+        }
+
+        var idStr = schemaTypeId.Id;
+
+        try
+        {
+            GtsSchemaRefFormatValidator.ValidateRefs(schemaDocument);
+        }
+        catch (Exception ex)
+        {
+            return new GtsSchemaValidationResult
+            {
+                Ok = false,
+                SchemaId = idStr,
+                FailureReason = "InvalidRefFormat",
+                Errors = new[] { ex.Message }
+            };
+        }
+
+        JsonObject? LoadSchema(GtsId id)
+        {
+            var t = _store.GetAsync(id).AsTask().GetAwaiter().GetResult();
+            return t?.IsSchema == true ? t.Content : null;
+        }
+
+        var (derivOk, derivErrors) = GtsSchemaDerivationValidator.ValidateAgainstRegistry(
+            schemaTypeId,
+            schemaDocument,
+            LoadSchema);
+        if (!derivOk)
+        {
+            return new GtsSchemaValidationResult
+            {
+                Ok = false,
+                SchemaId = idStr,
+                FailureReason = "PrecedentIncompatible",
+                Errors = derivErrors
+            };
+        }
+
+        return new GtsSchemaValidationResult { Ok = true, SchemaId = idStr };
+    }
+
+    /// <summary>
+    /// Validates a stored schema by type id (see <see cref="ValidateSchemaAsync(string, CancellationToken)"/>).
+    /// </summary>
+    public ValueTask<GtsSchemaValidationResult> ValidateSchemaAsync(
+        GtsId schemaTypeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(schemaTypeId);
+        return ValidateSchemaAsync(schemaTypeId.Id, cancellationToken);
+    }
+
+    /// <summary>
     /// Loads every stored entity, walks GTS references in each document, and reports references that do not
     /// resolve to another stored schema (type id) or instance. Pattern identifiers are ignored.
     /// </summary>

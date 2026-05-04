@@ -106,6 +106,14 @@ public static class GtsOpenApiSpec
                         ["operationId"] = "validateInstance"
                     }
                 },
+                ["/validate-schema"] = new Dictionary<string, object?>
+                {
+                    ["post"] = new Dictionary<string, object?>
+                    {
+                        ["summary"] = "Validate a schema against ref rules and precedent type chain",
+                        ["operationId"] = "validateSchema"
+                    }
+                },
                 ["/resolve-relationships"] = new Dictionary<string, object?>
                 {
                     ["get"] = new Dictionary<string, object?>

@@ -2,10 +2,10 @@ using System.Text.Json.Nodes;
 
 namespace Gts.Store;
 
-/// <summary>Validates that a derived JSON Schema remains forward-compatible with its parent in the GTS type chain.</summary>
+/// <summary>Validates that a derived JSON Schema remains forward-compatible with each precedent (parent type) in the GTS type id chain.</summary>
 public static class GtsSchemaDerivationValidator
 {
-    /// <summary>Walks the type-id chain toward the base and checks forward compatibility for each hop.</summary>
+    /// <summary>Walks the type-id chain toward the base and checks forward compatibility against each precedent schema for each hop.</summary>
     public static (bool Ok, IReadOnlyList<string> Errors) ValidateAgainstRegistry(
         GtsId derivedId,
         JsonObject derivedSchema,
@@ -23,14 +23,14 @@ public static class GtsSchemaDerivationValidator
 
             if (!GtsId.TryParse(parentIdStr, out var parentId) || parentId is null)
             {
-                errors.Add($"Invalid parent type id '{parentIdStr}'.");
+                errors.Add($"Invalid precedent type id '{parentIdStr}'.");
                 break;
             }
 
             var parentSchema = tryLoadTypeSchema(parentId);
             if (parentSchema is null)
             {
-                errors.Add($"Parent schema '{parentIdStr}' not found.");
+                errors.Add($"Precedent schema '{parentIdStr}' not found.");
                 break;
             }
 

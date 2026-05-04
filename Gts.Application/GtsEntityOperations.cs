@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
 using Gts.Extraction;
 using Gts.Store;
-using Gts.Store.Validation;
 
 namespace Gts.Application;
 
@@ -50,25 +49,25 @@ public static class GtsEntityOperations
             return new AddResult(false, "", null, entity.IsSchema, ex.Message);
         }
 
-        await registry.SaveAsync(entity).ConfigureAwait(false);
-
         if (entity.IsSchema && entity.GtsId is not null)
         {
-            try
+            var schemaVr = await registry.ValidateSchemaAsync(entity.GtsId, entity.Content, cancellationToken)
+                .ConfigureAwait(false);
+            if (!schemaVr.Ok)
             {
-                var (ok, errs) = GtsSchemaDerivationValidator.ValidateAgainstRegistry(entity.GtsId, entity.Content, id =>
-                {
-                    var t = registry.GetAsync(id).AsTask().GetAwaiter().GetResult();
-                    return t?.IsSchema == true ? t.Content : null;
-                });
-                if (!ok)
-                    return new AddResult(false, entity.GtsId.Id, entity.SchemaId, true, string.Join("; ", errs));
+                var msg = schemaVr.Errors is { Count: > 0 }
+                    ? string.Join("; ", schemaVr.Errors)
+                    : (schemaVr.FailureReason ?? "Schema validation failed");
+                return new AddResult(false, entity.GtsId.Id, entity.SchemaId, true, msg);
             }
-            catch (Exception ex)
-            {
-                return new AddResult(false, entity.GtsId.Id, entity.SchemaId, true, ex.Message);
-            }
+
+            await registry.SaveAsync(entity).ConfigureAwait(false);
+
+            var idOut = entity.GtsId.Id;
+            return new AddResult(true, idOut, string.IsNullOrEmpty(entity.SchemaId) ? null : entity.SchemaId, true, null);
         }
+
+        await registry.SaveAsync(entity).ConfigureAwait(false);
 
         if (validate && !entity.IsSchema && entity.GtsId is not null)
         {

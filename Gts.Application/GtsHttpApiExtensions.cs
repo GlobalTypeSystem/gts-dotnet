@@ -247,28 +247,16 @@ public static class GtsHttpApiExtensions
             if (!GtsId.TryParse(schemaId, out var gid) || gid is null || !gid.IsType)
                 return Results.Json(new { id = schemaId, ok = false, error = "Invalid schema id" });
 
-            var entity = await registry.GetAsync(gid).ConfigureAwait(false);
-            if (entity is null || !entity.IsSchema)
-                return Results.Json(new { id = schemaId, ok = false, error = "Schema not found" });
-
-            JsonObject? LoadSchema(GtsId id)
+            var vr = await registry.ValidateSchemaAsync(gid).ConfigureAwait(false);
+            if (!vr.Ok)
             {
-                var t = registry.GetAsync(id).AsTask().GetAwaiter().GetResult();
-                return t?.IsSchema == true ? t.Content : null;
+                var detail = vr.Errors is { Count: > 0 }
+                    ? string.Join("; ", vr.Errors)
+                    : (vr.FailureReason ?? "validation failed");
+                return Results.Json(new { id = schemaId, ok = false, error = detail });
             }
 
-            try
-            {
-                GtsSchemaRefFormatValidator.ValidateRefs(entity.Content);
-                var (ok, errs) = GtsSchemaDerivationValidator.ValidateAgainstRegistry(gid, entity.Content, LoadSchema);
-                if (!ok)
-                    return Results.Json(new { id = schemaId, ok = false, error = string.Join("; ", errs) });
-                return Results.Json(new { id = schemaId, ok = true });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { id = schemaId, ok = false, error = ex.Message });
-            }
+            return Results.Json(new { id = schemaId, ok = true });
         });
 
         app.MapPost("/validate-entity", async (HttpRequest req) =>
@@ -291,28 +279,16 @@ public static class GtsHttpApiExtensions
             {
                 if (!GtsId.TryParse(sid, out var gid) || gid is null)
                     return Results.Json(new { id = sid, ok = false, error = "Invalid id" });
-                var entity = await registry.GetAsync(gid).ConfigureAwait(false);
-                if (entity is null || !entity.IsSchema)
-                    return Results.Json(new { id = sid, ok = false, error = "Schema not found" });
-
-                JsonObject? LoadSchema(GtsId id)
+                var vr = await registry.ValidateSchemaAsync(gid).ConfigureAwait(false);
+                if (!vr.Ok)
                 {
-                    var t = registry.GetAsync(id).AsTask().GetAwaiter().GetResult();
-                    return t?.IsSchema == true ? t.Content : null;
+                    var detail = vr.Errors is { Count: > 0 }
+                        ? string.Join("; ", vr.Errors)
+                        : (vr.FailureReason ?? "validation failed");
+                    return Results.Json(new { id = sid, ok = false, error = detail });
                 }
 
-                try
-                {
-                    GtsSchemaRefFormatValidator.ValidateRefs(entity.Content);
-                    var (ok, errs) = GtsSchemaDerivationValidator.ValidateAgainstRegistry(gid, entity.Content, LoadSchema);
-                    return ok
-                        ? Results.Json(new { id = sid, ok = true })
-                        : Results.Json(new { id = sid, ok = false, error = string.Join("; ", errs) });
-                }
-                catch (Exception ex)
-                {
-                    return Results.Json(new { id = sid, ok = false, error = ex.Message });
-                }
+                return Results.Json(new { id = sid, ok = true });
             }
         });
 
