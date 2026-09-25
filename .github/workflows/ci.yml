@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+
+# Cancel previous runs for the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+jobs:
+  test:
+    name: Test Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+
+    steps:
+      - name: Force LF in working tree (w/a for Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: 'true'
+
+      # Install the .NET 8 SDK for the net8.0 target. global.json intentionally
+      # stays permissive ("8.0.0" + rollForward=latestMajor, i.e. "min .NET 8,
+      # use whatever newer SDK is present"); that pin is not a downloadable
+      # build, so we install an 8.0 SDK explicitly rather than via global.json.
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Show .NET version
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore gts-dotnet.sln
+
+      # Formatting check (fast fail for style issues)
+      - name: dotnet format (check)
+        run: make fmt
+
+      # Analyzers (linter)
+      - name: dotnet format analyzers (check)
+        run: make lint
+
+      # Build
+      - name: build
+        run: dotnet build gts-dotnet.sln -c Release --no-restore
+
+      # Unit tests
+      - name: test
+        run: dotnet test gts-dotnet.sln -c Release --no-build
+
+  security:
+    name: Security (dotnet list package --vulnerable on Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore gts-dotnet.sln
+
+      # Report vulnerable NuGet dependencies but do not fail CI.
+      - name: dotnet list package --vulnerable
+        run: make security
+        continue-on-error: true
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Generate a Cobertura coverage report.
+      - name: Run tests with coverage
+        run: dotnet test gts-dotnet.sln -c Release --collect:"XPlat Code Coverage"
+
+      # Upload to Codecov; do not fail CI if Codecov is down/misconfigured.
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: '**/coverage.cobertura.xml'
+          fail_ci_if_error: false
+          # token: ${{ secrets.CODECOV_TOKEN }}  # Uncomment if required for private repos
+
+  gts-spec-tests:
+    name: GTS Spec Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Builds the gts CLI binary, pulls the gts-spec test-runner image from
+      # GHCR (tag from .gts-spec-version), starts the server natively, waits
+      # for readiness, then runs pytest inside the container against
+      # host.docker.internal:$PORT. See Makefile.
+      - name: Run gts-spec tests via docker
+        run: make gts-spec-tests
