@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Gts.Parsing;
 using Gts.Utils;
 using Pidgin;
@@ -79,33 +80,50 @@ public sealed class GtsId
 
     private static ParseResult TryParseInternal(string? id, out GtsId? result)
     {
+        result = null;
         if (id is null)
-        {
-            result = null;
             return ParseResult.ArgumentIsNull;
-        }
-        
-        var (parseResult, isType) = id.EndsWith("~")
-            ? (Parsers.GtsTypeId.Parse(id), true)
-            : (Parsers.GtsInstanceId.Parse(id), false);
 
-        if (!parseResult.Success)
-        {
-            // TODO: add errors to the result
-            result = null;
+        var value = id.StartsWith("gts://", StringComparison.Ordinal) ? id[6..] : id;
+        if (value.Length == 0 || value.Length > MaxLength || value != value.ToLowerInvariant() ||
+            !value.StartsWith("gts.", StringComparison.Ordinal))
             return new ParseResult();
+
+        var isType = value.EndsWith('~');
+        var body = value[4..];
+        var parts = body.Split('~');
+        if (isType)
+            parts = parts[..^1];
+        if (parts.Length == 0 || parts.Any(string.IsNullOrEmpty))
+            return new ParseResult();
+
+        var uuidTail = !isType && parts.Length >= 2 && Guid.TryParseExact(parts[^1], "D", out _);
+        var segmentCount = uuidTail ? parts.Length - 1 : parts.Length;
+        var segments = new List<GtsIdSegment>();
+        for (var i = 0; i < segmentCount; i++)
+        {
+            var tokens = parts[i].Split('.');
+            if (tokens.Length is not (5 or 6) || tokens.Take(4).Any(t => !Regex.IsMatch(t, "^[a-z_][a-z0-9_]*$")) ||
+                !Regex.IsMatch(tokens[4], "^v(0|[1-9][0-9]*)$") ||
+                tokens.Length == 6 && !Regex.IsMatch(tokens[5], "^(0|[1-9][0-9]*)$"))
+                return new ParseResult();
+
+            segments.Add(new GtsIdSegment(
+                tokens[0], tokens[1], tokens[2], tokens[3], int.Parse(tokens[4][1..]),
+                tokens.Length == 6 ? int.Parse(tokens[5]) : null,
+                i < segmentCount - 1 || isType || uuidTail,
+                false));
         }
 
-        var segments = parseResult.Value
-            .Select(MapSegment);
+        if (uuidTail)
+            segments.Add(new GtsIdSegment(null, null, null, null, null, null, false, false));
 
-        result = new GtsId(id, new List<GtsIdSegment>(segments))
+        result = new GtsId(value, segments)
         {
             IsType = isType,
             IsInstance = !isType,
             IsPattern = false
         };
-
         return ParseResult.Success;
     }
 
@@ -215,7 +233,12 @@ public sealed class GtsId
     /// Generates a deterministic UUID v5 from this GTS identifier using the GTS namespace.
     /// </summary>
     public Guid ToGuid()
-        => GuidUtils.Create(GuidUtils.GtsNamespace, Id);
+    {
+        var tail = Id[(Id.LastIndexOf('~') + 1)..];
+        return Guid.TryParseExact(tail, "D", out var embedded)
+            ? embedded
+            : GuidUtils.Create(GuidUtils.GtsNamespace, Id);
+    }
 
     /// <inheritdoc/>
     public override bool Equals(object? obj)

@@ -146,7 +146,7 @@ public sealed class GtsJsonEntity
 
     private static GtsJsonEntity ExtractEntityInternal(JsonObject json, GtsExtractOptions options)
     {
-        var isSchema = IsJsonSchema(json);
+        var isSchema = IsJsonSchema(json, options);
         var (selectedEntityField, entityIdValue) = FirstNonEmptyField(json, options.EntityIdPropertyNames);
 
         string schemaId;
@@ -154,34 +154,28 @@ public sealed class GtsJsonEntity
 
         if (isSchema)
         {
-            // Derived schema: chain has more than one ~
             if (!string.IsNullOrEmpty(entityIdValue) && IsValidGtsId(entityIdValue) && entityIdValue.EndsWith('~'))
             {
-                var firstTilde = entityIdValue.IndexOf('~');
-                if (firstTilde > 0)
+                var priorTilde = entityIdValue.LastIndexOf('~', entityIdValue.Length - 2);
+                if (priorTilde >= 0)
                 {
-                    var afterFirst = entityIdValue.AsSpan(firstTilde + 1);
-                    var secondTilde = afterFirst.IndexOf('~');
-                    if (secondTilde >= 0)
-                    {
-                        selectedSchemaIdField = selectedEntityField;
-                        schemaId = entityIdValue[..(firstTilde + 1)];
-                        return BuildEntity(json, options, isSchema, entityIdValue, selectedEntityField, schemaId, selectedSchemaIdField);
-                    }
+                    selectedSchemaIdField = selectedEntityField;
+                    schemaId = entityIdValue[..(priorTilde + 1)];
+                    return BuildEntity(json, options, isSchema, entityIdValue, selectedEntityField, schemaId, selectedSchemaIdField);
                 }
             }
-            var schemaValue = GetFieldValue(json, "$schema");
-            if (!string.IsNullOrEmpty(schemaValue))
+            if (options.AllowDoubleDollarKeywords)
             {
-                selectedSchemaIdField = "$schema";
-                return BuildEntity(json, options, isSchema, entityIdValue, selectedEntityField, schemaValue, selectedSchemaIdField);
+                var schemaValue = GetFieldValue(json, "$schema");
+                if (!string.IsNullOrEmpty(schemaValue))
+                    return BuildEntity(json, options, isSchema, entityIdValue, selectedEntityField, schemaValue, "$schema");
             }
             return BuildEntity(json, options, isSchema, entityIdValue, selectedEntityField, "", null);
         }
         else
         {
             // Instance: try entity ID chain first
-            if (!string.IsNullOrEmpty(entityIdValue) && IsValidGtsId(entityIdValue) && !entityIdValue.EndsWith('~'))
+            if (selectedEntityField is not "$id" and not "$$id" && !string.IsNullOrEmpty(entityIdValue) && IsValidGtsId(entityIdValue) && !entityIdValue.EndsWith('~'))
             {
                 var lastTilde = entityIdValue.LastIndexOf('~');
                 if (lastTilde > 0)
@@ -218,7 +212,7 @@ public sealed class GtsJsonEntity
             if (!string.IsNullOrEmpty(entityIdValue) && IsValidGtsId(entityIdValue) && GtsId.TryParse(entityIdValue, out var parsed))
             {
                 gtsId = parsed;
-                if (string.IsNullOrEmpty(schemaId) && !string.IsNullOrEmpty(selectedEntityField))
+                if (string.IsNullOrEmpty(schemaId) && selectedEntityField is not null and not "$id" and not "$$id")
                 {
                     if (!entityIdValue.EndsWith('~'))
                     {
@@ -247,10 +241,10 @@ public sealed class GtsJsonEntity
             label);
     }
 
-    private static bool IsJsonSchema(JsonObject json)
+    private static bool IsJsonSchema(JsonObject json, GtsExtractOptions options)
     {
         if (json.TryGetPropertyValue("$schema", out _)) return true;
-        if (json.TryGetPropertyValue("$$schema", out _)) return true;
+        if (options.AllowDoubleDollarKeywords && json.TryGetPropertyValue("$$schema", out _)) return true;
         return false;
     }
 

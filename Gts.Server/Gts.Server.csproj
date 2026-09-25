@@ -5,6 +5,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Gts.Server</RootNamespace>
+    <!-- Allow running on a newer major runtime when the targeted 8.x shared
+         framework isn't installed (no-op when an 8.x runtime is present). -->
+    <RollForward>Major</RollForward>
   </PropertyGroup>
 
   <ItemGroup>

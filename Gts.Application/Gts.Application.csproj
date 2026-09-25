@@ -12,4 +12,14 @@
     <ProjectReference Include="..\Gts.Store\Gts.Store.csproj" />
   </ItemGroup>
 
+  <!-- Plain Microsoft.NET.Sdk libraries don't get the ASP.NET Core namespaces
+       in ImplicitUsings (only the Web SDK does), so add the ones the minimal
+       API mapping code relies on (WebApplication, MapGet/MapPost, HttpRequest,
+       Results, ...). -->
+  <ItemGroup>
+    <Using Include="Microsoft.AspNetCore.Builder" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.AspNetCore.Routing" />
+  </ItemGroup>
+
 </Project>

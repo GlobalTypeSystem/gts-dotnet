@@ -71,6 +71,12 @@ internal static class GtsSchemaDocumentNormalizer
                             }
                         }
                     }
+                    else if (key == "$schema" && val is JsonValue schemaValue)
+                    {
+                        var dialect = schemaValue.GetValue<string?>()?.Trim();
+                        if (dialect is "https://json-schema.org/draft-07/schema" or "https://json-schema.org/draft-07/schema#")
+                            obj[key] = "http://json-schema.org/draft-07/schema#";
+                    }
                 }
 
                 foreach (var p in obj)

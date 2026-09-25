@@ -18,6 +18,9 @@ help:
 build:
 	dotnet build $(SLN) -c $(CONFIG)
 	dotnet publish $(CLI_PROJECT) -c $(CONFIG) -o ./bin
+	@# The CLI assembly is Gts.Cli (see Gts.Cli.csproj for why); expose the
+	@# published apphost under the `gts` name expected by the server targets.
+	@ln -sf Gts.Cli ./bin/gts
 
 # Fix formatting issues
 dev-fmt:

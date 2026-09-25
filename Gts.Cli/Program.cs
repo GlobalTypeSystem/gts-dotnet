@@ -7,7 +7,6 @@ using Gts;
 using Gts.Application;
 using Gts.Extraction;
 using Gts.Store;
-using Microsoft.AspNetCore.Builder;
 
 static class Program
 {
@@ -212,10 +211,10 @@ Examples:
         for (var i = 0; i < args.Length; i++)
         {
             var a = args[i];
-            if (!a.StartsWith('-', StringComparison.Ordinal))
+            if (!a.StartsWith('-'))
                 continue;
             var key = a.TrimStart('-');
-            if (i + 1 < args.Length && !args[i + 1].StartsWith('-', StringComparison.Ordinal))
+            if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                 d[key] = args[++i];
             else
                 d[key] = "true";

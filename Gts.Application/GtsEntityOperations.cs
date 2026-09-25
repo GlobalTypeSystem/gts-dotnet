@@ -25,6 +25,8 @@ public static class GtsEntityOperations
         {
             if (string.IsNullOrEmpty(entity.SelectedEntityField))
                 return new AddResult(false, "", null, false, "Instance must have an id field");
+            if (entity.GtsId is { IsInstance: true } instanceId && instanceId.Segments.Count == 1)
+                return new AddResult(false, instanceId.Id, null, false, "Single-segment instance IDs are not allowed");
         }
         else
         {
@@ -32,12 +34,16 @@ public static class GtsEntityOperations
                 return new AddResult(false, "", null, true, "Unable to detect GTS ID in schema");
         }
 
-        if (validate && entity.IsSchema)
+        if (entity.IsSchema)
         {
-            var rawId = body.TryGetPropertyValue("$id", out var idn) ? idn?.GetValue<string>() : null;
-            if (!string.IsNullOrEmpty(rawId) && rawId.StartsWith("gts.", StringComparison.Ordinal) &&
+            var rawId = body.TryGetPropertyValue("$id", out var idn) && idn is JsonValue idValue && idValue.TryGetValue<string>(out var id)
+                ? id
+                : null;
+            if (validate && !string.IsNullOrEmpty(rawId) && rawId.StartsWith("gts.", StringComparison.Ordinal) &&
                 !rawId.StartsWith("gts://", StringComparison.Ordinal))
                 return new AddResult(false, "", null, true, "Schema $id must use gts:// URI format, not plain gts. prefix");
+            if (!TryGetSupportedDialect(body, out var dialectError))
+                return new AddResult(false, entity.GtsId?.Id ?? "", null, true, dialectError);
         }
 
         try
@@ -51,20 +57,23 @@ public static class GtsEntityOperations
 
         if (entity.IsSchema && entity.GtsId is not null)
         {
-            var schemaVr = await registry.ValidateSchemaAsync(entity.GtsId, entity.Content, cancellationToken)
-                .ConfigureAwait(false);
-            if (!schemaVr.Ok)
+            if (validate)
             {
-                var msg = schemaVr.Errors is { Count: > 0 }
-                    ? string.Join("; ", schemaVr.Errors)
-                    : (schemaVr.FailureReason ?? "Schema validation failed");
-                return new AddResult(false, entity.GtsId.Id, entity.SchemaId, true, msg);
+                var schemaVr = await registry.ValidateSchemaAsync(entity.GtsId, entity.Content, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!schemaVr.Ok)
+                {
+                    var msg = schemaVr.Errors is { Count: > 0 }
+                        ? string.Join("; ", schemaVr.Errors)
+                        : (schemaVr.FailureReason ?? "Schema validation failed");
+                    return new AddResult(false, entity.GtsId.Id, entity.SchemaId, true, msg);
+                }
             }
 
             await registry.SaveAsync(entity).ConfigureAwait(false);
 
-            var idOut = entity.GtsId.Id;
-            return new AddResult(true, idOut, string.IsNullOrEmpty(entity.SchemaId) ? null : entity.SchemaId, true, null);
+            var schemaIdOut = entity.GtsId.Id;
+            return new AddResult(true, schemaIdOut, string.IsNullOrEmpty(entity.SchemaId) ? null : entity.SchemaId, true, null);
         }
 
         await registry.SaveAsync(entity).ConfigureAwait(false);
@@ -78,5 +87,27 @@ public static class GtsEntityOperations
 
         var idOut = entity.GtsId?.Id ?? extract.Id ?? "";
         return new AddResult(true, idOut, string.IsNullOrEmpty(entity.SchemaId) ? null : entity.SchemaId, entity.IsSchema, null);
+    }
+
+    private static bool TryGetSupportedDialect(JsonObject body, out string? error)
+    {
+        error = null;
+        if (!body.TryGetPropertyValue("$schema", out var node) || node is not JsonValue value ||
+            !value.TryGetValue<string>(out var dialect) || string.IsNullOrEmpty(dialect))
+        {
+            error = "Schema must contain a supported $schema dialect";
+            return false;
+        }
+
+        if (dialect is "http://json-schema.org/draft-07/schema#" or
+            "https://json-schema.org/draft-07/schema#" or
+            "https://json-schema.org/draft/2019-09/schema" or
+            "https://json-schema.org/draft/2019-09/schema#" or
+            "https://json-schema.org/draft/2020-12/schema" or
+            "https://json-schema.org/draft/2020-12/schema#")
+            return true;
+
+        error = $"Unsupported JSON Schema dialect: {dialect}";
+        return false;
     }
 }

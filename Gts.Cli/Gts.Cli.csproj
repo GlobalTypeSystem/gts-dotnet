@@ -6,12 +6,32 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Gts.Cli</RootNamespace>
-    <AssemblyName>gts</AssemblyName>
+    <!-- Assembly name is Gts.Cli (not `gts`): naming it `gts` produces a
+         `gts.dll` that collides case-insensitively with the `Gts` library's
+         `Gts.dll` on macOS/Windows filesystems, which breaks both restore
+         ("Ambiguous project name 'gts'") and assembly resolution at runtime.
+         The runnable `gts` command is produced by the Makefile by copying the
+         published apphost to `./bin/gts`. -->
+    <!-- Allow running on a newer major runtime when the targeted 8.x shared
+         framework isn't installed (no-op when an 8.x runtime is present). -->
+    <RollForward>Major</RollForward>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\Gts.Application\Gts.Application.csproj" />
+  </ItemGroup>
+
+  <!-- Plain Microsoft.NET.Sdk executables don't get the ASP.NET Core namespaces
+       in ImplicitUsings (only the Web SDK does), so add the ones the `server`
+       command relies on (WebApplication, UseUrls, Services.Configure, ...). -->
+  <ItemGroup>
+    <Using Include="Microsoft.AspNetCore.Builder" />
+    <Using Include="Microsoft.AspNetCore.Hosting" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.AspNetCore.Routing" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Hosting" />
   </ItemGroup>
 
 </Project>

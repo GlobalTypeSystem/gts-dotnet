@@ -8,6 +8,8 @@ public sealed class GtsExtractOptions
     /// <summary>Default options with standard entity and schema property names.</summary>
     public static GtsExtractOptions Default { get; } = new();
 
+    public bool AllowDoubleDollarKeywords { get; init; } = true;
+
     /// <summary>Property names to check for the entity ID, in priority order.</summary>
     public IReadOnlyList<string> EntityIdPropertyNames { get; init; } =
     [

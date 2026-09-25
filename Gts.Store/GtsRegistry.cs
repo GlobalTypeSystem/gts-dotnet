@@ -217,6 +217,40 @@ public abstract class GtsRegistry
         }
     }
 
+    public async ValueTask<GtsInstanceValidationResult> ValidateJsonAsync(
+        JsonObject content,
+        GtsId schemaGtsId,
+        string? instanceId = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var schemaEntity = await _store.GetAsync(schemaGtsId).ConfigureAwait(false);
+        if (schemaEntity is null)
+            return new GtsInstanceValidationResult { Ok = false, Id = instanceId, FailureReason = "SchemaNotFound" };
+        if (!schemaEntity.IsSchema)
+            return new GtsInstanceValidationResult { Ok = false, Id = instanceId, FailureReason = "NotASchema" };
+
+        var all = await _store.GetAllAsync().ConfigureAwait(false);
+        var normalizedMap = new Dictionary<GtsId, JsonObject>();
+        foreach (var entity in all)
+        {
+            if (entity.IsSchema && entity.GtsId is not null)
+                normalizedMap[entity.GtsId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(entity.Content);
+        }
+
+        using var document = JsonDocument.Parse(content.ToJsonString());
+        var results = GtsJsonSchemaEvaluator.Evaluate(document.RootElement, schemaGtsId, normalizedMap);
+        return results.IsValid
+            ? new GtsInstanceValidationResult { Ok = true, Id = instanceId }
+            : new GtsInstanceValidationResult
+            {
+                Ok = false,
+                Id = instanceId,
+                FailureReason = "SchemaValidationFailed",
+                SchemaErrors = GtsJsonSchemaEvaluator.FlattenErrors(results)
+            };
+    }
+
     /// <summary>
     /// Validates a stored schema: <c>$ref</c> must be local (<c>#</c>) or <c>gts://</c>, and the schema must be
     /// forward-compatible with each precedent type in its GTS id chain (immediate parent, then grandparent, …).
