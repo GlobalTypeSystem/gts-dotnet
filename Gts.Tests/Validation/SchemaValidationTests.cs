@@ -97,7 +97,7 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync(id, derived);
 
         Assert.False(r.Ok);
-        Assert.Equal("PrecedentIncompatible", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.PrecedentIncompatible, r.FailureReason);
         Assert.Contains(r.Errors!, e => e.Contains("Precedent schema", StringComparison.Ordinal));
     }
 
@@ -120,7 +120,7 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.badref.type.v1~");
 
         Assert.False(r.Ok);
-        Assert.Equal("InvalidRefFormat", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.InvalidRefFormat, r.FailureReason);
         Assert.NotNull(r.Errors);
         Assert.NotEmpty(r.Errors);
     }
@@ -132,7 +132,7 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.events.type.v1.0");
 
         Assert.False(r.Ok);
-        Assert.Equal("InvalidSchemaId", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.InvalidSchemaId, r.FailureReason);
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.events.type.v1~");
 
         Assert.False(r.Ok);
-        Assert.Equal("SchemaNotFound", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.SchemaNotFound, r.FailureReason);
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.inst.type.v1~x.y._.i1.v1.0");
 
         Assert.False(r.Ok);
-        Assert.Equal("InvalidSchemaId", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.InvalidSchemaId, r.FailureReason);
     }
 
     [Fact]
@@ -187,6 +187,6 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.misc.type.v1~");
 
         Assert.False(r.Ok);
-        Assert.Equal("NotASchema", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.NotASchema, r.FailureReason);
     }
 }

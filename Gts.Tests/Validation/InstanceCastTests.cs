@@ -10,6 +10,8 @@ public class InstanceCastTests
     [Fact]
     public async Task CastInstanceAsync_upgrade_minor_when_evolution_allows()
     {
+        // Closed models (additionalProperties:false): adding an optional property in v1.1 is a
+        // backward-compatible evolution (old data has no extra keys, so it still validates under v1.1).
         const string s0 = """
             {
               "$$id": "gts://gts.x.cast.demo.item.v1.0~",
@@ -17,8 +19,10 @@ public class InstanceCastTests
               "type": "object",
               "required": ["a"],
               "properties": {
+                "id": { "type": "string" },
                 "a": { "type": "string" }
-              }
+              },
+              "additionalProperties": false
             }
             """;
 
@@ -29,15 +33,17 @@ public class InstanceCastTests
               "type": "object",
               "required": ["a"],
               "properties": {
+                "id": { "type": "string" },
                 "a": { "type": "string" },
                 "b": { "type": "string", "default": "default-b" }
-              }
+              },
+              "additionalProperties": false
             }
             """;
 
         const string instance = """
             {
-              "gtsId": "gts.x.cast.demo.item.v1.0~x.cast.ns.myinst.v1.0",
+              "id": "gts.x.cast.demo.item.v1.0~x.cast.ns.myinst.v1.0",
               "a": "hello"
             }
             """;
@@ -94,7 +100,7 @@ public class InstanceCastTests
             GtsId.Parse("gts.x.cast.demo.doc.v1.1~"));
 
         Assert.False(result.Ok);
-        Assert.Equal("IncompatibleMinorEvolution", result.FailureReason);
+        Assert.Equal(GtsValidationFailure.CastValidationFailed, result.FailureReason);
         Assert.NotNull(result.Comparison);
         Assert.False(result.Comparison!.IsBackwardEvolutionCompatible);
     }
@@ -139,6 +145,6 @@ public class InstanceCastTests
             GtsId.Parse("gts.x.cast.other.thing.v1.0~"));
 
         Assert.False(result.Ok);
-        Assert.Equal("NotMinorVariantPair", result.FailureReason);
+        Assert.Equal(GtsValidationFailure.NotMinorVariantPair, result.FailureReason);
     }
 }

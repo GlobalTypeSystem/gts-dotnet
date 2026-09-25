@@ -155,7 +155,7 @@ public class InstanceValidationTests
             "gts.x.test6.events.type.v1~x.test6.invalid.event.v1.0~x.y._.some_event2.v1.0");
 
         Assert.False(result.Ok);
-        Assert.Equal("SchemaValidationFailed", result.FailureReason);
+        Assert.Equal(GtsValidationFailure.SchemaValidationFailed, result.FailureReason);
         Assert.NotNull(result.SchemaErrors);
         Assert.NotEmpty(result.SchemaErrors!);
     }
@@ -166,7 +166,7 @@ public class InstanceValidationTests
         var registry = GtsRegistry.InMemory(new GtsRegistryConfig(false));
         var result = await registry.ValidateInstanceAsync("gts.x.nonexistent.pkg.ns.type.v1.0");
         Assert.False(result.Ok);
-        Assert.Equal("InstanceNotFound", result.FailureReason);
+        Assert.Equal(GtsValidationFailure.InstanceNotFound, result.FailureReason);
     }
 
     [Fact]
@@ -302,6 +302,6 @@ public class InstanceValidationTests
         var result = await registry.ValidateInstanceAsync("8b2e3f45-6789-4abc-8123-bcdef1234567");
 
         Assert.False(result.Ok);
-        Assert.Equal("SchemaValidationFailed", result.FailureReason);
+        Assert.Equal(GtsValidationFailure.SchemaValidationFailed, result.FailureReason);
     }
 }
