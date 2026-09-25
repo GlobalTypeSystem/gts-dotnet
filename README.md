@@ -4,7 +4,7 @@
 
 An idiomatic C#/.NET library for working with **GTS** ([Global Type System](https://github.com/gts-spec/gts-spec)) identifiers and JSON/JSON Schema artifacts.
 
-Supported GTS spec version: `v0.14.1` (pinned in [`.gts-spec-version`](.gts-spec-version))
+Supported GTS spec version: `v0.14.3` (pinned in [`.gts-spec-version`](.gts-spec-version))
 
 ## Roadmap
 
