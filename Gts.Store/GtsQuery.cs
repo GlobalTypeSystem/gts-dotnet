@@ -61,7 +61,7 @@ public static class GtsQuery
                 return false;
             }
 
-            if (!GtsId.TryParsePattern(basePart, out var w) || w is null)
+            if (basePart.Count(c => c == '*') != 1 || basePart.Length < 2 || basePart[^2] is not ('.' or '~'))
             {
                 error = "Invalid query";
                 return false;
@@ -139,7 +139,7 @@ public static class GtsQuery
                 continue;
             if (!MatchFilters(e.Content, query.Filters))
                 continue;
-            results.Add((JsonObject)JsonNode.Parse(e.Content.ToJsonString())!);
+            results.Add((JsonObject)e.Content.DeepClone());
         }
 
         return results;
@@ -149,7 +149,10 @@ public static class GtsQuery
     internal static int NormalizeLimit(int limit) => limit is >= 1 and <= 1000 ? limit : 100;
 
     internal static bool IdMatches(GtsId id, GtsParsedQuery q) =>
-        q.IsWildcard ? id.Matches(q.BasePattern) : string.Equals(id.Id, q.BasePattern, StringComparison.Ordinal);
+        q.IsWildcard
+            ? id.Matches(q.BasePattern) && (!q.BasePattern.EndsWith("~*", StringComparison.Ordinal) ||
+                                           id.Segments.Count > q.BasePattern[..^1].Count(character => character == '~'))
+            : string.Equals(id.Id, q.BasePattern, StringComparison.Ordinal);
 
     private static Dictionary<string, string> ParseFilters(string? filterPart)
     {

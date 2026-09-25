@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Gts.Extraction;
+using Gts.Store.Validation;
 
 namespace Gts.Store;
 
@@ -7,7 +8,9 @@ namespace Gts.Store;
 public static class GtsSchemaRefFormatValidator
 {
     /// <summary>Throws <see cref="InvalidOperationException"/> when an invalid <c>$ref</c> is found.</summary>
-    public static void ValidateRefs(JsonNode? node, string path = "")
+    public static void ValidateRefs(JsonNode? node, string path = "") => ValidateRefs(node, node, path);
+
+    private static void ValidateRefs(JsonNode? node, JsonNode? root, string path)
     {
         switch (node)
         {
@@ -17,11 +20,12 @@ public static class GtsSchemaRefFormatValidator
                     var currentPath = string.IsNullOrEmpty(path) ? "$ref" : path + ".$ref";
                     if (refUri.StartsWith("#", StringComparison.Ordinal))
                     {
-                        // local ref OK
+                        if (!GtsJsonPointer.TryEvaluate(root, refUri, out _))
+                            throw new InvalidOperationException($"Invalid $ref at '{currentPath}': local reference target '{refUri}' not found.");
                     }
-                    else if (refUri.StartsWith("gts://", StringComparison.Ordinal))
+                    else if (refUri.StartsWith(GtsConstants.UriPrefix, StringComparison.Ordinal))
                     {
-                        var gtsId = refUri["gts://".Length..];
+                        var gtsId = GtsConstants.StripUriPrefix(refUri).Split('#')[0];
                         if (!GtsId.TryParse(gtsId, out _) && !GtsId.TryParsePattern(gtsId, out _))
                             throw new InvalidOperationException(
                                 $"Invalid $ref at '{currentPath}': '{refUri}' contains invalid GTS identifier '{gtsId}'.");
@@ -31,19 +35,19 @@ public static class GtsSchemaRefFormatValidator
                             $"Invalid $ref at '{currentPath}': '{refUri}' must be a local ref (starting with '#') or a GTS URI (starting with 'gts://').");
                 }
 
-                foreach (var (k, v) in obj)
+                foreach (var (key, value) in obj)
                 {
-                    if (k == "$ref")
+                    if (key == "$ref")
                         continue;
-                    var nested = string.IsNullOrEmpty(path) ? k : path + "." + k;
-                    ValidateRefs(v, nested);
+                    var nested = string.IsNullOrEmpty(path) ? key : path + "." + key;
+                    ValidateRefs(value, root, nested);
                 }
-
                 break;
-            case JsonArray arr:
-                for (var i = 0; i < arr.Count; i++)
-                    ValidateRefs(arr[i], $"{path}[{i}]");
+            case JsonArray array:
+                for (var index = 0; index < array.Count; index++)
+                    ValidateRefs(array[index], root, $"{path}[{index}]");
                 break;
         }
     }
+
 }
