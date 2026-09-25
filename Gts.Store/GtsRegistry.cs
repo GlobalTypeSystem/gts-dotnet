@@ -10,7 +10,7 @@ namespace Gts.Store;
 public abstract class GtsRegistry
 {
     private readonly IGtsStore _store;
-    
+
     /// <summary>Registry configuration (e.g. reference validation).</summary>
     public GtsRegistryConfig Config { get; }
 
@@ -19,11 +19,11 @@ public abstract class GtsRegistry
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(config);
-        
+
         _store = store;
         Config = config;
     }
-    
+
     /// <summary>Stores or overwrites the entity in the registry.</summary>
     public ValueTask SaveAsync(GtsJsonEntity entity)
     {

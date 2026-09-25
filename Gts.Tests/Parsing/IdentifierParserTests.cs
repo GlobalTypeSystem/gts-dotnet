@@ -1,6 +1,7 @@
-﻿using Gts.Parsing;
+using Gts.Parsing;
 
 namespace Gts.Tests.Parsing;
+
 using Pidgin;
 
 public class IdentifierParserTests

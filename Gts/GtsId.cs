@@ -13,38 +13,38 @@ public sealed class GtsId
 {
     /// <summary>Maximum allowed length of a GTS identifier string.</summary>
     public const int MaxLength = 1024;
-    
+
     /// <summary>
     /// The canonical identifier string (lowercase, trimmed).
     /// </summary>
     public string Id { get; }
-    
+
     /// <summary>True if this ID is a type identifier (ends with ~).</summary>
     public bool IsType { get; private set; }
-    
+
     /// <summary>True if this ID is an instance identifier (does not end with ~).</summary>
     public bool IsInstance { get; private set; }
-    
+
     /// <summary>True if this ID was parsed as a pattern (may contain wildcards).</summary>
     public bool IsPattern { get; private set; }
-    
+
     /// <summary>
     /// Parsed segments (vendor.package.namespace.type.version per segment).
     /// </summary>
     public IReadOnlyCollection<GtsIdSegment> Segments { get; }
-    
+
     /// <summary>Creates a GTS ID from a canonical string and parsed segments.</summary>
     internal GtsId(string id, IReadOnlyCollection<GtsIdSegment> segments)
     {
         Id = id;
         Segments = segments;
     }
-    
+
     /// <summary>Parses a GTS type or instance ID; throws <see cref="ParseException"/> on failure.</summary>
     public static GtsId Parse(string id)
     {
         var parseResult = TryParseInternal(id, out GtsId? result);
-        
+
         if (parseResult)
         {
             return result!;
@@ -52,10 +52,10 @@ public sealed class GtsId
 
         throw new ParseException(parseResult);
     }
-    
+
     /// <summary>Attempts to parse a GTS type or instance ID without throwing.</summary>
     public static ParseResult TryParse(string? id, out GtsId? result)
-    {   
+    {
         return TryParseInternal(id, out result);
     }
 
@@ -63,7 +63,7 @@ public sealed class GtsId
     public static GtsId ParsePattern(string pattern)
     {
         var parseResult = TryParsePatternInternal(pattern, out GtsId? result);
-        
+
         if (parseResult)
         {
             return result!;
@@ -134,9 +134,9 @@ public sealed class GtsId
             result = null;
             return ParseResult.ArgumentIsNull;
         }
-        
+
         var parseResult = Parsers.GtsPattern.Parse(pattern);
-        
+
         if (!parseResult.Success)
         {
             // TODO: add errors to the result
@@ -211,10 +211,10 @@ public sealed class GtsId
                 if (pSeg.Package is not null && pSeg.Package != cSeg.Package) return false;
                 if (pSeg.Namespace is not null && pSeg.Namespace != cSeg.Namespace) return false;
                 if (pSeg.Type is not null && pSeg.Type != cSeg.Type) return false;
-                
+
                 if (pSeg.VersionMajor.HasValue && pSeg.VersionMajor != cSeg.VersionMajor) return false;
                 if (pSeg.VersionMinor.HasValue && (cSeg.VersionMinor is null || pSeg.VersionMinor != cSeg.VersionMinor)) return false;
-                
+
                 return true;
             }
 
