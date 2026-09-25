@@ -310,7 +310,7 @@ public sealed class GtsJsonEntity
             if (!string.IsNullOrEmpty(val) && IsValidGtsId(val))
                 return (name, val);
         }
-        
+
         foreach (var name in propertyNames)
         {
             var val = GetFieldValue(json, name);

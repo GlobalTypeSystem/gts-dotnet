@@ -23,29 +23,29 @@ internal static class GtsSchemaDocumentNormalizer
         switch (node)
         {
             case JsonObject obj:
-            {
-                var keys = obj.Select(p => p.Key).ToList();
-                foreach (var key in keys)
                 {
-                    if (key.StartsWith("$$", StringComparison.Ordinal) && key.Length > 2)
+                    var keys = obj.Select(p => p.Key).ToList();
+                    foreach (var key in keys)
                     {
-                        var newKey = "$" + key[2..];
-                        var n = obj[key]!;
-                        obj.Remove(key);
-                        obj[newKey] = n;
+                        if (key.StartsWith("$$", StringComparison.Ordinal) && key.Length > 2)
+                        {
+                            var newKey = "$" + key[2..];
+                            var n = obj[key]!;
+                            obj.Remove(key);
+                            obj[newKey] = n;
+                        }
                     }
-                }
 
-                foreach (var p in obj)
-                    RenameDoubleDollarKeysDeep(p.Value);
-                break;
-            }
+                    foreach (var p in obj)
+                        RenameDoubleDollarKeysDeep(p.Value);
+                    break;
+                }
             case JsonArray arr:
-            {
-                foreach (var item in arr)
-                    RenameDoubleDollarKeysDeep(item);
-                break;
-            }
+                {
+                    foreach (var item in arr)
+                        RenameDoubleDollarKeysDeep(item);
+                    break;
+                }
         }
     }
 
@@ -54,41 +54,41 @@ internal static class GtsSchemaDocumentNormalizer
         switch (node)
         {
             case JsonObject obj:
-            {
-                foreach (var (key, val) in obj.ToList())
                 {
-                    if (key is "$id" or "$ref" && val is JsonValue jv)
+                    foreach (var (key, val) in obj.ToList())
                     {
-                        var s = jv.GetValue<string?>();
-                        if (!string.IsNullOrEmpty(s))
+                        if (key is "$id" or "$ref" && val is JsonValue jv)
                         {
-                            var t = s.Trim();
-                            if (t.StartsWith(GtsUriPrefix, StringComparison.Ordinal))
+                            var s = jv.GetValue<string?>();
+                            if (!string.IsNullOrEmpty(s))
                             {
-                                var id = t[GtsUriPrefix.Length..];
-                                if (id.Length > 0)
-                                    obj[key] = GtsSchemaResolutionUris.ToSyntheticUri(id).AbsoluteUri;
+                                var t = s.Trim();
+                                if (t.StartsWith(GtsUriPrefix, StringComparison.Ordinal))
+                                {
+                                    var id = t[GtsUriPrefix.Length..];
+                                    if (id.Length > 0)
+                                        obj[key] = GtsSchemaResolutionUris.ToSyntheticUri(id).AbsoluteUri;
+                                }
                             }
                         }
+                        else if (key == "$schema" && val is JsonValue schemaValue)
+                        {
+                            var dialect = schemaValue.GetValue<string?>()?.Trim();
+                            if (dialect is "https://json-schema.org/draft-07/schema" or "https://json-schema.org/draft-07/schema#")
+                                obj[key] = "http://json-schema.org/draft-07/schema#";
+                        }
                     }
-                    else if (key == "$schema" && val is JsonValue schemaValue)
-                    {
-                        var dialect = schemaValue.GetValue<string?>()?.Trim();
-                        if (dialect is "https://json-schema.org/draft-07/schema" or "https://json-schema.org/draft-07/schema#")
-                            obj[key] = "http://json-schema.org/draft-07/schema#";
-                    }
-                }
 
-                foreach (var p in obj)
-                    RewriteGtsUrisDeep(p.Value);
-                break;
-            }
+                    foreach (var p in obj)
+                        RewriteGtsUrisDeep(p.Value);
+                    break;
+                }
             case JsonArray arr:
-            {
-                foreach (var item in arr)
-                    RewriteGtsUrisDeep(item);
-                break;
-            }
+                {
+                    foreach (var item in arr)
+                        RewriteGtsUrisDeep(item);
+                    break;
+                }
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿using Gts.Parsing;
+using Gts.Parsing;
 using Pidgin;
 
 namespace Gts.Tests.Parsing;
@@ -13,7 +13,7 @@ public class TypeParserTests
 
         Assert.True(id.IsType);
         Assert.False(id.IsInstance);
-        
+
         var segments = id.ToArray();
         Assert.Single(segments);
     }

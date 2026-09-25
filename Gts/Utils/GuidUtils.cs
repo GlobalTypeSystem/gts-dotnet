@@ -8,14 +8,14 @@ namespace Gts.Utils;
 /// GTS uses namespace UUID(NAMESPACE_URL, "gts") and name = the GTS identifier string.
 /// </summary>
 internal static class GuidUtils
-{    
+{
     /// <summary>
     /// GTS namespace: uuid5(NAMESPACE_URL, "gts") as per spec.
     /// RFC 4122 namespace for URLs
     /// </summary>
     public static readonly Guid GtsNamespace = Create(
         new("6ba7b811-9dad-11d1-80b4-00c04fd430c8"), "gts");
-    
+
     /// <summary>
     /// Creates a UUID v5 from a namespace and name (UTF-8 bytes are hashed).
     /// </summary>

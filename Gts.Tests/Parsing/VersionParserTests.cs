@@ -17,7 +17,7 @@ public class VersionParserTests
     {
         Assert.Throws<ParseException<char>>(() => Parsers.VersionMajor.ParseOrThrow("123"));
     }
-    
+
     [Fact]
     public void VersionMinorParsesNumberWithoutVPrefix()
     {

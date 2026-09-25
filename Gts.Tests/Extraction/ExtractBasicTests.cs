@@ -18,13 +18,13 @@ public class ExtractBasicTests
     public void ExtractingOneOfDefaultIdsReturnsId(string id)
     {
         var gtsId = "gts.vendor.package.namespace.type.v0~a.b.c.d.v1";
-        
+
         var result = GtsJsonEntity.ExtractId(new JsonObject
         {
             [id] = gtsId,
             ["name"] = "Some Name"
         });
-        
+
         Assert.Equal(id, result.SelectedEntityField);
         Assert.Equal(gtsId, result.Id);
     }
@@ -34,13 +34,13 @@ public class ExtractBasicTests
     public void ExtractingOneOfNonDefaultIdsReturnsNulls(string id)
     {
         var gtsId = "gts.vendor.package.namespace.type.v0~a.b.c.d.v1";
-        
+
         var result = GtsJsonEntity.ExtractId(new JsonObject
         {
             [id] = gtsId,
             ["name"] = "Some Name",
         });
-        
+
         Assert.Null(result.SelectedEntityField);
         Assert.Null(result.Id);
     }
@@ -50,15 +50,15 @@ public class ExtractBasicTests
     public void ExtractingOneOfCustomIdsWithConfigReturnsId(string id)
     {
         var gtsId = "gts.vendor.package.namespace.type.v0~a.b.c.d.v1";
-        
+
         var result = GtsJsonEntity.ExtractId(
             new JsonObject
             {
                 [id] = gtsId,
                 ["name"] = "Some Name"
             },
-            new (){ EntityIdPropertyNames = [id]});
-        
+            new() { EntityIdPropertyNames = [id] });
+
         Assert.Equal(id, result.SelectedEntityField);
         Assert.Equal(gtsId, result.Id);
     }
@@ -74,7 +74,7 @@ public class ExtractBasicTests
                 ["gtsId"] = gtsId, // 1st
                 ["$id"] = gtsId, // 2nd
             });
-        
+
         Assert.Equal(gtsId, result.Id);
         Assert.Equal("gtsId", result.SelectedEntityField); // 1st wins
     }
@@ -89,7 +89,7 @@ public class ExtractBasicTests
                 ["$schema"] = "http://json-schema.org/draft-07/schema#",
                 ["type"] = "object",
             });
-        
+
         Assert.Equal("gts.vendor.package.namespace.type.v1.0~", result.Id);
     }
 
@@ -103,7 +103,7 @@ public class ExtractBasicTests
                 ["name"] = "Some Name",
                 ["id"] = "gts.vendor.package.namespace.type.v1.0~", // valid
             });
-        
+
         Assert.Equal("gts.vendor.package.namespace.type.v1.0~", result.Id);
         Assert.Equal("id", result.SelectedEntityField);
     }
@@ -116,7 +116,7 @@ public class ExtractBasicTests
             {
                 ["name"] = "Some Name",
             });
-        
+
         Assert.Null(result.Id);
         Assert.Null(result.SelectedEntityField);
     }

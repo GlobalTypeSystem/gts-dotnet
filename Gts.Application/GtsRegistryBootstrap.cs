@@ -154,13 +154,13 @@ public static class GtsRegistryBootstrap
 
                     break;
                 case JsonObject obj:
-                {
-                    var clone = (JsonObject)obj.DeepClone()!;
-                    GtsJsonKeyNormalizer.Apply(clone);
-                    await GtsEntityOperations.TryAddAsync(registry, clone, validate: false, opt, cancellationToken)
-                        .ConfigureAwait(false);
-                    break;
-                }
+                    {
+                        var clone = (JsonObject)obj.DeepClone()!;
+                        GtsJsonKeyNormalizer.Apply(clone);
+                        await GtsEntityOperations.TryAddAsync(registry, clone, validate: false, opt, cancellationToken)
+                            .ConfigureAwait(false);
+                        break;
+                    }
             }
         }
     }
