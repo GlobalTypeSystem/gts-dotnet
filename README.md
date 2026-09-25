@@ -4,6 +4,8 @@
 
 An idiomatic C#/.NET library for working with **GTS** ([Global Type System](https://github.com/gts-spec/gts-spec)) identifiers and JSON/JSON Schema artifacts.
 
+Supported GTS spec version: `v0.14.1` (pinned in [`.gts-spec-version`](.gts-spec-version))
+
 ## Roadmap
 
 Featureset:
@@ -133,4 +135,66 @@ var registry = GtsRegistry.InMemory(new GtsRegistryConfig(false));
 var result = await registry.ValidateInstanceAsync("gts.vendor.pkg.ns.type.v1~x._.myinst.v1");
 // result.Ok, result.FailureReason, result.SchemaErrors
 ```
+
+## Development
+
+Common tasks are wrapped in the [`Makefile`](Makefile); run `make help` to
+list every target. Requires the .NET SDK (see [`global.json`](global.json)).
+
+```bash
+make build       # build the solution and publish the gts CLI to ./bin/gts
+make fmt         # verify formatting (dotnet format whitespace + style)
+make lint        # run analyzers (dotnet format analyzers)
+make test        # run the unit tests
+make security    # audit NuGet dependencies for known vulnerabilities
+make coverage    # collect code coverage
+make check       # full local gate: fmt + lint + test + gts-spec-tests
+```
+
+## Testing
+
+`make gts-spec-tests` runs the shared
+[gts-spec](https://github.com/GlobalTypeSystem/gts-spec) conformance suite
+against a freshly built server. Tests come from the published runner
+image `ghcr.io/globaltypesystem/gts-spec-tests`; the tag is pinned in
+[`.gts-spec-version`](.gts-spec-version) as an immutable
+`vMAJOR.MINOR.PATCH` — every commit reproduces the same test run, and
+rolling forward is a deliberate bump of that file. Requires a working
+Docker daemon plus the .NET SDK (the target builds the CLI binary before
+pulling the test-runner image).
+
+```bash
+make gts-spec-tests                                    # full suite on :8000
+make gts-spec-tests PORT=8001                          # different port
+make gts-spec-tests TEST=test_op1_id_validation.py     # single file / selector
+```
+
+Opt into the rolling minor tag, try a different patch, or test a fork:
+
+```bash
+make gts-spec-tests GTS_SPEC_VERSION=v0.11             # rolling vMAJOR.MINOR
+make gts-spec-tests GTS_SPEC_VERSION=v0.11.0           # specific patch
+make gts-spec-tests GTS_SPEC_IMAGE=ghcr.io/your-fork/gts-spec-tests
+```
+
+Iterating on the test suite itself? Mount a local checkout over `/tests`:
+
+```bash
+make gts-spec-tests GTS_SPEC_TESTS_DIR=../gts-spec/tests
+```
+
+For tight test-edit loops, keep a long-running server in one terminal and
+re-run targeted tests in another:
+
+```bash
+# Terminal 1
+make gts-server PORT=8001
+
+# Terminal 2
+make gts-spec-tests-run PORT=8001 TEST=test_op6_instance_validation.py
+```
+
+## License
+
+Apache License 2.0
 
