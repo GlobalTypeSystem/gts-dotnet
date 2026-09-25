@@ -55,6 +55,19 @@ public sealed class GtsJsonEntity
         Label = label;
     }
 
+    public GtsJsonEntity DeepClone()
+    {
+        return new GtsJsonEntity(
+            GtsId,
+            SchemaId,
+            SelectedEntityField,
+            SelectedSchemaIdField,
+            IsSchema,
+            (JsonObject)Content.DeepClone(),
+            GtsRefs.ToArray(),
+            Label);
+    }
+
     /// <summary>
     /// Extracts the primary entity/schema ID from a JSON object.
     /// </summary>

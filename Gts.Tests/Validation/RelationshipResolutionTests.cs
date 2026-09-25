@@ -193,4 +193,47 @@ public class RelationshipResolutionTests
         var all = await registry.GetAllAsync();
         Assert.Equal(2, all.Count);
     }
+
+    [Fact]
+    public async Task Registry_uses_defensive_entity_copies()
+    {
+        const string id = "gts.x.copy.events.type.v1~x.copy._.item.v1.0";
+        var content = JsonNode.Parse($$"""
+            { "gtsId": "{{id}}", "value": 1 }
+            """)!.AsObject();
+        var registry = GtsRegistry.InMemoryThreadSafe(new GtsRegistryConfig(false));
+        await registry.SaveAsync(GtsJsonEntity.ExtractEntity(content));
+
+        content["value"] = 2;
+        var first = await registry.GetAsync(GtsId.Parse(id));
+        Assert.Equal(1, first!.Content["value"]!.GetValue<int>());
+        first.Content["value"] = 3;
+        var all = await registry.GetAllAsync();
+        all[0].Content["value"] = 4;
+
+        var second = await registry.GetAsync(GtsId.Parse(id));
+        Assert.Equal(1, second!.Content["value"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task Thread_safe_registry_updates_both_indexes_atomically()
+    {
+        var registry = GtsRegistry.InMemoryThreadSafe(new GtsRegistryConfig(false));
+        var ids = Enumerable.Range(0, 100)
+            .Select(index => $"gts.x.concurrent.events.type.v1~x.concurrent._.item_{index}.v1.0")
+            .ToArray();
+
+        await Task.WhenAll(ids.Select(async id =>
+        {
+            var content = JsonNode.Parse($$"""
+                { "gtsId": "{{id}}", "value": 1 }
+                """)!.AsObject();
+            await registry.SaveAsync(GtsJsonEntity.ExtractEntity(content));
+        }));
+
+        Assert.Equal(ids.Length, await registry.CountAsync());
+        Assert.Equal(ids.Length, (await registry.GetAllAsync()).Count);
+        foreach (var id in ids)
+            Assert.NotNull(await registry.GetByInstanceIdAsync(id));
+    }
 }
