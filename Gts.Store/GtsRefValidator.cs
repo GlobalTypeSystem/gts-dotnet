@@ -139,15 +139,26 @@ public static class GtsRefValidator
         {
             if (obj[keyword] is not JsonArray branches)
                 continue;
-            var branchResults = new List<List<string>>();
+            // Only branches that actually declare an x-gts-ref (directly or nested) participate
+            // in the reference-match count. A branch without one - e.g. the {"type":"null"} arm of a
+            // nullable reference - is neutral: this pass never inspects its structural keywords, so it
+            // would otherwise always look like a match and make a valid value fail oneOf's exactly-one
+            // rule. Structural oneOf/anyOf selection is left to the JSON Schema engine.
+            var refBranchResults = new List<List<string>>();
+            var hasNeutralBranch = false;
             foreach (var branch in branches)
             {
+                if (!ContainsXGtsRef(branch))
+                {
+                    hasNeutralBranch = true;
+                    continue;
+                }
                 var branchErrors = new List<string>();
                 WalkInstance(instance, branch, root, selectedTypeId, context, mode, path, branchErrors, new HashSet<string>(localRefs), depth + 1);
-                branchResults.Add(branchErrors);
+                refBranchResults.Add(branchErrors);
             }
-            var matching = branchResults.Count(result => result.Count == 0);
-            if (branchResults.Count > 0 && (matching == 0 || keyword == "oneOf" && matching != 1))
+            var matching = refBranchResults.Count(result => result.Count == 0);
+            if (refBranchResults.Count > 0 && (matching == 0 && !hasNeutralBranch || keyword == "oneOf" && matching > 1))
                 errors.Add($"{path}: {keyword}: expected {(keyword == "oneOf" ? "exactly one" : "at least one")} matching x-gts-ref branch");
         }
         if (obj["allOf"] is JsonArray allOf)
@@ -203,6 +214,17 @@ public static class GtsRefValidator
     }
 
     private static bool Matches(string value, string pattern) => new GtsRefConstraint(pattern).Matches(value);
+
+    /// <summary>
+    /// Whether a schema node carries an <c>x-gts-ref</c> declaration anywhere within it, so that
+    /// combinator branches without one can be treated as neutral rather than always-matching.
+    /// </summary>
+    private static bool ContainsXGtsRef(JsonNode? node) => node switch
+    {
+        JsonObject obj => obj.ContainsKey(GtsSchemaKeywords.Ref) || obj.Any(property => ContainsXGtsRef(property.Value)),
+        JsonArray array => array.Any(ContainsXGtsRef),
+        _ => false,
+    };
 
     /// <summary>
     /// Per-validation lookup context: an id -&gt; entity index (built once), a lazily-built map of
