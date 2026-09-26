@@ -25,7 +25,11 @@ internal sealed class GtsJsonSchemaEngine : IGtsJsonSchemaEngine
         // change to a reachable document, so the key still moves when it must.
         var reachable = ReachableClosure(rootSchemaId, root, schemas);
         var fingerprint = Fingerprint(rootSchemaId.Id, reachable.Select(item => item.Value));
-        var schema = GetOrCompile(fingerprint, () => Compile(rootSchemaId, root, schemas));
+        // Compile against only the reachable closure, not the whole registry: each cached
+        // JsonSchema keeps its SchemaRegistry (and the dictionary captured by registry.Fetch)
+        // alive, so capturing the full store would retain O(cache size × store size) of JSON.
+        var closure = reachable.ToDictionary(item => item.Key, item => item.Value);
+        var schema = GetOrCompile(fingerprint, () => Compile(rootSchemaId, root, closure));
         return schema.Evaluate(GtsJson.ToElement(instance), EvaluationOptions());
     }
 

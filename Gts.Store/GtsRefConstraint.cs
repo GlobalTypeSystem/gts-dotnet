@@ -20,8 +20,14 @@ internal readonly record struct GtsRefConstraint(string Pattern)
     internal bool Matches(string value)
     {
         if (Pattern == GtsConstants.IdPrefix + "*") return true;
-        return Pattern.EndsWith('*')
-            ? value.StartsWith(Pattern[..^1], StringComparison.Ordinal)
-            : value.StartsWith(Pattern, StringComparison.Ordinal);
+        if (Pattern.EndsWith('*'))
+            return value.StartsWith(Pattern[..^1], StringComparison.Ordinal);
+        if (!value.StartsWith(Pattern, StringComparison.Ordinal))
+            return false;
+        // Prefix matching alone ignores segment boundaries: an exact constraint such as
+        // "gts.a.b.c.d.v1~x.y.z.w.v1" would otherwise also accept "…w.v12" or "…w.v1.5".
+        // Type patterns (ending with '~') admit derived identifiers; any other (exact) pattern
+        // requires a full match or a '~' segment boundary immediately after the pattern.
+        return value.Length == Pattern.Length || Pattern.EndsWith('~') || value[Pattern.Length] == '~';
     }
 }

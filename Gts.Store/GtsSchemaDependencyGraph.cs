@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Gts.Store.Validation;
 
 namespace Gts.Store;
 
@@ -92,12 +93,29 @@ internal static class GtsSchemaDependencyGraph
 
         if (schema["$ref"] is JsonValue refValue && refValue.TryGetValue<string>(out var reference) && reference.StartsWith(GtsConstants.UriPrefix, StringComparison.Ordinal))
         {
-            var id = GtsConstants.StripUriPrefix(reference).Split('#')[0];
-            if (GtsId.TryParse(id, out var parsed) && parsed is not null && stack.Add(id) && load(parsed) is JsonObject target)
+            // A $ref may carry a JSON Pointer fragment (e.g. "gts://…~#/definitions/address") that
+            // selects a subschema of the target, and — under 2019-09/2020-12 — may sit next to sibling
+            // keywords that also apply. Evaluate the fragment against the loaded document and preserve
+            // any siblings by composing them with the resolved target via allOf.
+            var parts = GtsConstants.StripUriPrefix(reference).Split('#', 2);
+            var id = parts[0];
+            if (GtsId.TryParse(id, out var parsed) && parsed is not null && stack.Add(reference) && load(parsed) is JsonObject document)
             {
-                var resolved = Resolve(target, load, stack, depth + 1);
-                stack.Remove(id);
-                return resolved;
+                JsonObject? target = parts.Length == 2 && parts[1].Length > 0
+                    ? (GtsJsonPointer.TryEvaluate(document, "#" + parts[1], out var fragment) ? fragment as JsonObject : null)
+                    : document;
+                if (target is not null)
+                {
+                    var resolved = Resolve(target, load, stack, depth + 1);
+                    stack.Remove(reference);
+                    var siblings = new JsonObject();
+                    foreach (var (key, value) in schema)
+                        if (key != "$ref") siblings[key] = value?.DeepClone();
+                    if (siblings.Count == 0)
+                        return resolved;
+                    return new JsonObject { ["allOf"] = new JsonArray(resolved, Resolve(siblings, load, stack, depth + 1)) };
+                }
+                stack.Remove(reference);
             }
         }
         var clone = new JsonObject();

@@ -75,10 +75,30 @@ internal static class GtsSchemaDocumentNormalizer
         {
             if (obj[keyword] is JsonArray branches)
             {
+                // The JSON Schema engine cannot see x-gts-ref (it is stripped here and checked
+                // separately by GtsRefValidator). Two oneOf branches that differ only by x-gts-ref
+                // — e.g. {"type":"string","x-gts-ref":"a.*"} and {…"b.*"} — collapse to the same
+                // structural schema, so every value matches both and oneOf rejects everything.
+                // Evaluate such a oneOf as anyOf: exclusivity is enforced by GtsRefValidator.
+                //
+                // NOTE: gts-go and gts-rust avoid this rewrite by registering x-gts-ref as a real
+                // JSON Schema keyword/vocabulary, so the engine evaluates it during combinator
+                // resolution and oneOf "just works". JsonSchema.Net (this project's engine) exposes
+                // no public API to add a keyword to a built-in dialect — Dialect can only be built
+                // from a full IKeywordHandler list, and the built-in Draft-07/2019-09/2020-12 sets
+                // are not publicly enumerable — so we cannot follow that approach without reflecting
+                // into library internals. This localized normalization is the pragmatic alternative;
+                // gts-python and gts-ts use the keyword-registration approach their libraries support.
+                var hadRef = branches.OfType<JsonObject>().Any(branch => branch.ContainsKey(GtsSchemaKeywords.Ref));
                 foreach (var child in branches)
                     StripXGtsRefDeep(child);
                 if (branches.Count > 0 && branches.All(branch => branch is JsonObject branchObject && branchObject.Count == 0))
                     obj.Remove(keyword);
+                else if (keyword == "oneOf" && hadRef && !obj.ContainsKey("anyOf"))
+                {
+                    obj.Remove("oneOf");
+                    obj["anyOf"] = branches;
+                }
             }
         }
         foreach (var keyword in new[] { "items", "additionalItems", "additionalProperties", "contains", "not", "if", "then", "else" })

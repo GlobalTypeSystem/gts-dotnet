@@ -11,7 +11,12 @@ internal static class GtsIdParser
         parsed = null;
         if (input is null)
             return false;
-        var value = GtsConstants.StripUriPrefix(input);
+        // Validate the original input: a GtsId is always the bare canonical form ("gts.…").
+        // The "gts://" URI form is a JSON Schema serialization detail ($id/$ref) and is stripped
+        // by those URI-specific callers before they reach here, matching the gts-rust/gts-go
+        // reference implementations. Accepting it here makes GtsId.Id disagree with the input and
+        // lets URI-form values leak into query/validation paths that compare against canonical ids.
+        var value = input;
         if (value.Length == 0 || value.Length > maxLength || value != value.ToLowerInvariant() || !value.StartsWith(GtsConstants.IdPrefix, StringComparison.Ordinal))
             return false;
 
