@@ -1,0 +1,12 @@
+<Project>
+
+  <!-- Settings shared by every project in the solution. Project files override
+       or extend these as needed (e.g. OutputType, RootNamespace, RollForward). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+</Project>

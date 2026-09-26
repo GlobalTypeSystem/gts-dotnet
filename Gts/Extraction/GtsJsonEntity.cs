@@ -8,7 +8,7 @@ namespace Gts.Extraction;
 /// </summary>
 public sealed class GtsJsonEntity
 {
-    private const string GtsUriPrefix = "gts://";
+    private const string GtsUriPrefix = GtsConstants.UriPrefix;
 
     /// <summary>Parsed GTS ID if the entity has a valid GTS identifier; null for anonymous instances.</summary>
     public GtsId? GtsId { get; }
@@ -153,7 +153,7 @@ public sealed class GtsJsonEntity
     {
         var refs = new List<GtsReference>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        WalkAndCollectRefs(node, "", refs, seen);
+        WalkAndCollectRefs(node, "", refs, seen, 0);
         return refs;
     }
 
@@ -266,11 +266,11 @@ public sealed class GtsJsonEntity
         if (!json.TryGetPropertyValue(propertyName, out var node))
             return null;
 
-        var s = node?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(s))
+        if (node is not JsonValue value || value.GetValueKind() != JsonValueKind.String ||
+            !value.TryGetValue<string>(out var s) || string.IsNullOrWhiteSpace(s))
             return null;
 
-        var trimmed = s!.Trim();
+        var trimmed = s.Trim();
         if (trimmed.Length == 0)
             return null;
 
@@ -282,35 +282,13 @@ public sealed class GtsJsonEntity
 
     private static (string? field, string? value) FirstNonEmptyField(JsonObject json, IReadOnlyList<string> propertyNames)
     {
-        // TODO: check this impl
-        // foreach (var (key, _) in json)
-        // {
-        //     if (propertyNames.Contains(key))
-        //     {
-        //         var val = GetFieldValue(json, key);
-        //         if (!string.IsNullOrEmpty(val) && IsValidGtsId(val))
-        //             return (key, val);
-        //     }
-        // }
-        //
-        // foreach (var (key, _) in json)
-        // {
-        //     if (propertyNames.Contains(key))
-        //     {
-        //         var val = GetFieldValue(json, key);
-        //         if (!string.IsNullOrEmpty(val))
-        //             return (key, val);
-        //     }
-        // }
-
-        // TODO: bellow original AI impl
         foreach (var name in propertyNames)
         {
             var val = GetFieldValue(json, name);
             if (!string.IsNullOrEmpty(val) && IsValidGtsId(val))
                 return (name, val);
         }
-        
+
         foreach (var name in propertyNames)
         {
             var val = GetFieldValue(json, name);
@@ -326,9 +304,9 @@ public sealed class GtsJsonEntity
         return GtsId.TryParse(s, out _) || GtsId.TryParsePattern(s, out _);
     }
 
-    private static void WalkAndCollectRefs(JsonNode? node, string path, List<GtsReference> refs, HashSet<string> seen)
+    private static void WalkAndCollectRefs(JsonNode? node, string path, List<GtsReference> refs, HashSet<string> seen, int depth)
     {
-        if (node == null) return;
+        if (node == null || depth >= GtsConstants.MaxNestingDepth) return;
 
         if (node is JsonValue value && value.GetValueKind() == JsonValueKind.String)
         {
@@ -352,7 +330,7 @@ public sealed class GtsJsonEntity
             foreach (var (k, v) in obj)
             {
                 var nextPath = string.IsNullOrEmpty(path) ? k : path + "." + k;
-                WalkAndCollectRefs(v, nextPath, refs, seen);
+                WalkAndCollectRefs(v, nextPath, refs, seen, depth + 1);
             }
 
             return;
@@ -363,7 +341,7 @@ public sealed class GtsJsonEntity
             for (var i = 0; i < arr.Count; i++)
             {
                 var nextPath = string.IsNullOrEmpty(path) ? "[" + i + "]" : path + "[" + i + "]";
-                WalkAndCollectRefs(arr[i], nextPath, refs, seen);
+                WalkAndCollectRefs(arr[i], nextPath, refs, seen, depth + 1);
             }
         }
     }

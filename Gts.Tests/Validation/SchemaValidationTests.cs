@@ -97,7 +97,7 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync(id, derived);
 
         Assert.False(r.Ok);
-        Assert.Equal("PrecedentIncompatible", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.PrecedentIncompatible, r.FailureReason);
         Assert.Contains(r.Errors!, e => e.Contains("Precedent schema", StringComparison.Ordinal));
     }
 
@@ -120,7 +120,7 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.badref.type.v1~");
 
         Assert.False(r.Ok);
-        Assert.Equal("InvalidRefFormat", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.InvalidRefFormat, r.FailureReason);
         Assert.NotNull(r.Errors);
         Assert.NotEmpty(r.Errors);
     }
@@ -132,7 +132,7 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.events.type.v1.0");
 
         Assert.False(r.Ok);
-        Assert.Equal("InvalidSchemaId", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.InvalidSchemaId, r.FailureReason);
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.events.type.v1~");
 
         Assert.False(r.Ok);
-        Assert.Equal("SchemaNotFound", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.SchemaNotFound, r.FailureReason);
     }
 
     [Fact]
@@ -169,7 +169,40 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.inst.type.v1~x.y._.i1.v1.0");
 
         Assert.False(r.Ok);
-        Assert.Equal("InvalidSchemaId", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.InvalidSchemaId, r.FailureReason);
+    }
+
+    [Fact]
+    public async Task Descendant_of_ancestor_with_cross_dialect_ref_is_rejected()
+    {
+        // Issue C: the cross-dialect $ref lives on an ancestor; the descendant
+        // derives by re-declaration and references neither the ancestor nor the
+        // 2020-12 target. Validating the descendant (and an instance of it) must
+        // still be rejected because its ancestor is invalid (spec §11.0 + §12).
+        const string foreign = """
+            {"$$id":"gts://gts.x.dialanc.ns.foreign.v1~","$$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"note":{"type":"string"}}}
+            """;
+        const string ancestor = """
+            {"$$id":"gts://gts.x.dialanc.ns.base.v1~","$$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"ext":{"$$ref":"gts://gts.x.dialanc.ns.foreign.v1~"}}}
+            """;
+        const string child = """
+            {"$$id":"gts://gts.x.dialanc.ns.base.v1~x.dialanc._.child.v1~","$$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"label":{"type":"string"}}}
+            """;
+        const string instance = """
+            {"type":"gts.x.dialanc.ns.base.v1~x.dialanc._.child.v1~","id":"gts.x.dialanc.ns.base.v1~x.dialanc._.child.v1~x.dialanc._.thing.v1.0","label":"ok"}
+            """;
+        var registry = GtsRegistry.InMemory(new GtsRegistryConfig(false));
+        await registry.SaveAsync(GtsJsonEntity.ExtractEntity(JsonNode.Parse(foreign)!.AsObject()));
+        await registry.SaveAsync(GtsJsonEntity.ExtractEntity(JsonNode.Parse(ancestor)!.AsObject()));
+        await registry.SaveAsync(GtsJsonEntity.ExtractEntity(JsonNode.Parse(child)!.AsObject()));
+        await registry.SaveAsync(GtsJsonEntity.ExtractEntity(JsonNode.Parse(instance)!.AsObject()));
+
+        var schemaResult = await registry.ValidateSchemaAsync("gts.x.dialanc.ns.base.v1~x.dialanc._.child.v1~");
+        Assert.False(schemaResult.Ok);
+
+        var instanceResult = await registry.ValidateInstanceAsync(
+            "gts.x.dialanc.ns.base.v1~x.dialanc._.child.v1~x.dialanc._.thing.v1.0");
+        Assert.False(instanceResult.Ok);
     }
 
     [Fact]
@@ -187,6 +220,6 @@ public class SchemaValidationTests
         var r = await registry.ValidateSchemaAsync("gts.x.schema12.misc.type.v1~");
 
         Assert.False(r.Ok);
-        Assert.Equal("NotASchema", r.FailureReason);
+        Assert.Equal(GtsValidationFailure.NotASchema, r.FailureReason);
     }
 }

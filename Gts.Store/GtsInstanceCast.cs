@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Gts.Store;
@@ -42,7 +41,7 @@ public static class GtsInstanceCast
             if (targetProps.TryGetPropertyValue(prop, out var pSchema) && pSchema is JsonObject pso &&
                 pso.TryGetPropertyValue("default", out var def))
             {
-                result[prop] = def.DeepClone();
+                result[prop] = def?.DeepClone();
             }
         }
 
@@ -53,7 +52,7 @@ public static class GtsInstanceCast
             if (result.ContainsKey(prop))
                 continue;
             if (pSchema is JsonObject pso && pso.TryGetPropertyValue("default", out var def))
-                result[prop] = def.DeepClone();
+                result[prop] = def?.DeepClone();
         }
 
         foreach (var (prop, pSchema) in targetProps)
@@ -150,6 +149,4 @@ public static class GtsInstanceCast
         }
     }
 
-    internal static JsonDocument ToJsonDocument(JsonObject o)
-        => JsonDocument.Parse(o.ToJsonString());
 }

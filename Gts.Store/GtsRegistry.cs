@@ -10,7 +10,10 @@ namespace Gts.Store;
 public abstract class GtsRegistry
 {
     private readonly IGtsStore _store;
-    
+    private readonly GtsSchemaValidationService _schemaValidation;
+    private readonly GtsInstanceValidationService _instanceValidation;
+    private readonly GtsCastService _casting;
+
     /// <summary>Registry configuration (e.g. reference validation).</summary>
     public GtsRegistryConfig Config { get; }
 
@@ -19,16 +22,27 @@ public abstract class GtsRegistry
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(config);
-        
+
         _store = store;
         Config = config;
+        _schemaValidation = new GtsSchemaValidationService(store);
+        _instanceValidation = new GtsInstanceValidationService(store, (id, token, mode) => _schemaValidation.ValidateStoredAsync(id.Id, token, mode));
+        _casting = new GtsCastService(store);
     }
-    
+
     /// <summary>Stores or overwrites the entity in the registry.</summary>
     public ValueTask SaveAsync(GtsJsonEntity entity)
     {
-        // TODO: validation logic
         return _store.SaveAsync(entity);
+    }
+
+    /// <summary>
+    /// Atomically stores the entity unless one with the same id already exists with different content.
+    /// Returns <see cref="GtsSaveOutcome.Conflict"/> in that case without mutating the store.
+    /// </summary>
+    public ValueTask<GtsSaveOutcome> TrySaveAsync(GtsJsonEntity entity)
+    {
+        return _store.TrySaveAsync(entity);
     }
 
     /// <summary>Retrieves an entity by GTS ID, or null if not found.</summary>
@@ -49,6 +63,15 @@ public abstract class GtsRegistry
     public ValueTask<IList<GtsJsonEntity>> GetAllAsync()
     {
         return _store.GetAllAsync();
+    }
+
+    /// <summary>
+    /// Returns a read-only snapshot of all entities without deep-cloning their content. The returned entities
+    /// must be treated as read-only; intended for internal read-only consumers such as validation.
+    /// </summary>
+    public ValueTask<IReadOnlyList<GtsJsonEntity>> SnapshotForReadAsync()
+    {
+        return _store.SnapshotForReadAsync();
     }
 
     /// <summary>Returns the number of entities in the registry.</summary>
@@ -74,7 +97,9 @@ public abstract class GtsRegistry
         if (!GtsQuery.TryParse(expr, out var parsed, out var parseError) || parsed is null)
             return GtsQueryExecutionResult.Failed(lim, parseError ?? "Invalid query");
 
-        var all = await _store.GetAllAsync().ConfigureAwait(false);
+        // Read-only snapshot avoids cloning the whole registry up front; GtsQuery.Execute deep-clones
+        // only the entities that actually match (single clone per result instead of one per entity).
+        var all = await _store.SnapshotForReadAsync().ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         var results = GtsQuery.Execute(all, parsed, lim, cancellationToken);
         return GtsQueryExecutionResult.Success(lim, results);
@@ -147,109 +172,19 @@ public abstract class GtsRegistry
     /// </summary>
     /// <param name="instanceId">GTS instance id or opaque id (e.g. UUID).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public async ValueTask<GtsInstanceValidationResult> ValidateInstanceAsync(
+    public ValueTask<GtsInstanceValidationResult> ValidateInstanceAsync(
         string instanceId,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
+        CancellationToken cancellationToken = default,
+        GtsRefValidationMode refValidationMode = GtsRefValidationModes.Default) =>
+        _instanceValidation.ValidateStoredAsync(instanceId, cancellationToken, refValidationMode);
 
-        if (string.IsNullOrWhiteSpace(instanceId))
-            return new GtsInstanceValidationResult { Ok = false, Id = instanceId };
-
-        var trimmed = instanceId.Trim();
-        var entity = await _store.GetByInstanceIdAsync(trimmed).ConfigureAwait(false);
-        if (entity is null)
-            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "InstanceNotFound" };
-
-        if (entity.IsSchema)
-            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "NotAnInstance" };
-
-        var extract = GtsJsonEntity.ExtractId(entity.Content);
-        var schemaIdStr = extract.SchemaId;
-        if (string.IsNullOrEmpty(schemaIdStr) || !schemaIdStr.EndsWith('~'))
-            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "SchemaIdMissing" };
-
-        if (!GtsId.TryParse(schemaIdStr, out var schemaGtsId) || schemaGtsId is null || !schemaGtsId.IsType)
-            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "InvalidSchemaId" };
-
-        var schemaEntity = await _store.GetAsync(schemaGtsId).ConfigureAwait(false);
-        if (schemaEntity is null || !schemaEntity.IsSchema)
-            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "SchemaNotFound" };
-
-        var all = await _store.GetAllAsync().ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var normalizedMap = new Dictionary<GtsId, JsonObject>();
-        foreach (var e in all)
-        {
-            if (!e.IsSchema || e.GtsId is null)
-                continue;
-            normalizedMap[e.GtsId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(e.Content);
-        }
-
-        if (!normalizedMap.ContainsKey(schemaGtsId))
-            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "SchemaNotFound" };
-
-        JsonDocument instDoc;
-        try
-        {
-            instDoc = JsonDocument.Parse(entity.Content.ToJsonString());
-        }
-        catch (JsonException)
-        {
-            return new GtsInstanceValidationResult { Ok = false, Id = trimmed, FailureReason = "InvalidInstanceJson" };
-        }
-
-        using (instDoc)
-        {
-            var results = GtsJsonSchemaEvaluator.Evaluate(instDoc.RootElement, schemaGtsId, normalizedMap);
-
-            if (results.IsValid)
-                return new GtsInstanceValidationResult { Ok = true, Id = trimmed };
-
-            return new GtsInstanceValidationResult
-            {
-                Ok = false,
-                Id = trimmed,
-                FailureReason = "SchemaValidationFailed",
-                SchemaErrors = GtsJsonSchemaEvaluator.FlattenErrors(results)
-            };
-        }
-    }
-
-    public async ValueTask<GtsInstanceValidationResult> ValidateJsonAsync(
+    public ValueTask<GtsInstanceValidationResult> ValidateJsonAsync(
         JsonObject content,
         GtsId schemaGtsId,
         string? instanceId = null,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var schemaEntity = await _store.GetAsync(schemaGtsId).ConfigureAwait(false);
-        if (schemaEntity is null)
-            return new GtsInstanceValidationResult { Ok = false, Id = instanceId, FailureReason = "SchemaNotFound" };
-        if (!schemaEntity.IsSchema)
-            return new GtsInstanceValidationResult { Ok = false, Id = instanceId, FailureReason = "NotASchema" };
-
-        var all = await _store.GetAllAsync().ConfigureAwait(false);
-        var normalizedMap = new Dictionary<GtsId, JsonObject>();
-        foreach (var entity in all)
-        {
-            if (entity.IsSchema && entity.GtsId is not null)
-                normalizedMap[entity.GtsId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(entity.Content);
-        }
-
-        using var document = JsonDocument.Parse(content.ToJsonString());
-        var results = GtsJsonSchemaEvaluator.Evaluate(document.RootElement, schemaGtsId, normalizedMap);
-        return results.IsValid
-            ? new GtsInstanceValidationResult { Ok = true, Id = instanceId }
-            : new GtsInstanceValidationResult
-            {
-                Ok = false,
-                Id = instanceId,
-                FailureReason = "SchemaValidationFailed",
-                SchemaErrors = GtsJsonSchemaEvaluator.FlattenErrors(results)
-            };
-    }
+        CancellationToken cancellationToken = default,
+        GtsRefValidationMode refValidationMode = GtsRefValidationModes.Default) =>
+        _instanceValidation.ValidateAsync(content, schemaGtsId, instanceId, cancellationToken, refValidationMode);
 
     /// <summary>
     /// Validates a stored schema: <c>$ref</c> must be local (<c>#</c>) or <c>gts://</c>, and the schema must be
@@ -257,58 +192,11 @@ public abstract class GtsRegistry
     /// </summary>
     /// <param name="schemaTypeId">GTS type id of the schema (trailing <c>~</c>).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public async ValueTask<GtsSchemaValidationResult> ValidateSchemaAsync(
+    public ValueTask<GtsSchemaValidationResult> ValidateSchemaAsync(
         string schemaTypeId,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (string.IsNullOrWhiteSpace(schemaTypeId))
-        {
-            return new GtsSchemaValidationResult
-            {
-                Ok = false,
-                SchemaId = schemaTypeId,
-                FailureReason = "InvalidSchemaId"
-            };
-        }
-
-        var trimmed = schemaTypeId.Trim();
-        if (!GtsId.TryParse(trimmed, out var gid) || gid is null || !gid.IsType)
-        {
-            return new GtsSchemaValidationResult
-            {
-                Ok = false,
-                SchemaId = trimmed,
-                FailureReason = "InvalidSchemaId"
-            };
-        }
-
-        var entity = await _store.GetAsync(gid).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (entity is null)
-        {
-            return new GtsSchemaValidationResult
-            {
-                Ok = false,
-                SchemaId = trimmed,
-                FailureReason = "SchemaNotFound"
-            };
-        }
-
-        if (!entity.IsSchema)
-        {
-            return new GtsSchemaValidationResult
-            {
-                Ok = false,
-                SchemaId = trimmed,
-                FailureReason = "NotASchema"
-            };
-        }
-
-        return await ValidateSchemaAsync(gid, entity.Content, cancellationToken).ConfigureAwait(false);
-    }
+        CancellationToken cancellationToken = default,
+        GtsRefValidationMode refValidationMode = GtsRefValidationModes.Default) =>
+        _schemaValidation.ValidateStoredAsync(schemaTypeId, cancellationToken, refValidationMode);
 
     /// <summary>
     /// Validates a schema document for a GTS type id using stored precedent schemas only (the document itself need not be in the registry).
@@ -316,76 +204,23 @@ public abstract class GtsRegistry
     /// <param name="schemaTypeId">GTS type id this document defines (trailing <c>~</c>).</param>
     /// <param name="schemaDocument">JSON Schema body (e.g. from extraction).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public async ValueTask<GtsSchemaValidationResult> ValidateSchemaAsync(
+    public ValueTask<GtsSchemaValidationResult> ValidateSchemaAsync(
         GtsId schemaTypeId,
         JsonObject schemaDocument,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(schemaTypeId);
-        ArgumentNullException.ThrowIfNull(schemaDocument);
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (!schemaTypeId.IsType)
-        {
-            return new GtsSchemaValidationResult
-            {
-                Ok = false,
-                SchemaId = schemaTypeId.Id,
-                FailureReason = "InvalidSchemaId"
-            };
-        }
-
-        var idStr = schemaTypeId.Id;
-
-        try
-        {
-            GtsSchemaRefFormatValidator.ValidateRefs(schemaDocument);
-        }
-        catch (Exception ex)
-        {
-            return new GtsSchemaValidationResult
-            {
-                Ok = false,
-                SchemaId = idStr,
-                FailureReason = "InvalidRefFormat",
-                Errors = new[] { ex.Message }
-            };
-        }
-
-        JsonObject? LoadSchema(GtsId id)
-        {
-            var t = _store.GetAsync(id).AsTask().GetAwaiter().GetResult();
-            return t?.IsSchema == true ? t.Content : null;
-        }
-
-        var (derivOk, derivErrors) = GtsSchemaDerivationValidator.ValidateAgainstRegistry(
-            schemaTypeId,
-            schemaDocument,
-            LoadSchema);
-        if (!derivOk)
-        {
-            return new GtsSchemaValidationResult
-            {
-                Ok = false,
-                SchemaId = idStr,
-                FailureReason = "PrecedentIncompatible",
-                Errors = derivErrors
-            };
-        }
-
-        return new GtsSchemaValidationResult { Ok = true, SchemaId = idStr };
-    }
+        CancellationToken cancellationToken = default,
+        GtsRefValidationMode refValidationMode = GtsRefValidationModes.Default) =>
+        _schemaValidation.ValidateAsync(schemaTypeId, schemaDocument, cancellationToken, refValidationMode);
 
     /// <summary>
     /// Validates a stored schema by type id (see <see cref="ValidateSchemaAsync(string, CancellationToken)"/>).
     /// </summary>
     public ValueTask<GtsSchemaValidationResult> ValidateSchemaAsync(
         GtsId schemaTypeId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        GtsRefValidationMode refValidationMode = GtsRefValidationModes.Default)
     {
         ArgumentNullException.ThrowIfNull(schemaTypeId);
-        return ValidateSchemaAsync(schemaTypeId.Id, cancellationToken);
+        return ValidateSchemaAsync(schemaTypeId.Id, cancellationToken, refValidationMode);
     }
 
     /// <summary>
@@ -461,233 +296,24 @@ public abstract class GtsRegistry
     /// <param name="instanceId">GTS instance id or opaque id (e.g. UUID).</param>
     /// <param name="toSchemaId">Target schema type id (trailing <c>~</c>).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public async ValueTask<GtsInstanceCastResult> CastInstanceAsync(
+    public ValueTask<GtsInstanceCastResult> CastInstanceAsync(
         string instanceId,
         GtsId toSchemaId,
-        CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(instanceId))
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = instanceId,
-                FailureReason = "InvalidInstanceId"
-            };
-        }
+        CancellationToken cancellationToken = default) =>
+        _casting.CastAsync(instanceId, toSchemaId, cancellationToken);
 
-        ArgumentNullException.ThrowIfNull(toSchemaId);
-
-        cancellationToken.ThrowIfCancellationRequested();
-        var trimmed = instanceId.Trim();
-        var entity = await _store.GetByInstanceIdAsync(trimmed).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (entity is null)
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = trimmed,
-                ToSchemaId = toSchemaId,
-                FailureReason = "InstanceNotFound"
-            };
-        }
-
-        if (entity.IsSchema)
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = trimmed,
-                ToSchemaId = toSchemaId,
-                FailureReason = "NotAnInstance"
-            };
-        }
-
-        if (!toSchemaId.IsType)
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = trimmed,
-                ToSchemaId = toSchemaId,
-                FailureReason = "InvalidTargetSchemaId"
-            };
-        }
-
-        var toSchemaEntity = await _store.GetAsync(toSchemaId).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (toSchemaEntity is null || !toSchemaEntity.IsSchema)
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = trimmed,
-                ToSchemaId = toSchemaId,
-                FailureReason = "TargetSchemaNotFound"
-            };
-        }
-
-        var extract = GtsJsonEntity.ExtractId(entity.Content);
-        var fromSchemaIdStr = extract.SchemaId;
-        if (string.IsNullOrEmpty(fromSchemaIdStr) || !GtsId.TryParse(fromSchemaIdStr, out var fromGid) || fromGid is null || !fromGid.IsType)
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = trimmed,
-                ToSchemaId = toSchemaId,
-                FailureReason = "SchemaIdMissing"
-            };
-        }
-
-        var fromSchemaEntity = await _store.GetAsync(fromGid).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (fromSchemaEntity is null || !fromSchemaEntity.IsSchema)
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = trimmed,
-                FromSchemaId = fromGid,
-                ToSchemaId = toSchemaId,
-                FailureReason = "SourceSchemaNotFound"
-            };
-        }
-
-        var comparison = GtsSchemaMinorVersionCompatibility.ComparePair(
-            fromGid,
-            fromSchemaEntity.Content,
-            toSchemaId,
-            toSchemaEntity.Content);
-
-        if (!comparison.AreMinorVariantPair || !EvolutionAllowsCast(fromGid, toSchemaId, comparison))
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = trimmed,
-                FromSchemaId = fromGid,
-                ToSchemaId = toSchemaId,
-                FailureReason = !comparison.AreMinorVariantPair ? "NotMinorVariantPair" : "IncompatibleMinorEvolution",
-                Comparison = comparison
-            };
-        }
-
-        var targetFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(toSchemaEntity.Content);
-        var casted = GtsInstanceCast.CastToEffectiveSchema(entity.Content, targetFlat);
-
-        var all = await _store.GetAllAsync().ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var normalizedMap = new Dictionary<GtsId, JsonObject>();
-        foreach (var e in all)
-        {
-            if (!e.IsSchema || e.GtsId is null)
-                continue;
-            normalizedMap[e.GtsId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(e.Content);
-        }
-
-        if (!normalizedMap.ContainsKey(toSchemaId))
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = trimmed,
-                FromSchemaId = fromGid,
-                ToSchemaId = toSchemaId,
-                FailureReason = "SchemaNormalizationFailed",
-                Comparison = comparison,
-                CastedContent = casted
-            };
-        }
-
-        var tolerant = (JsonObject)GtsInstanceCast.RemoveGtsConstConstraints(
-            JsonNode.Parse(toSchemaEntity.Content.ToJsonString())!)!.AsObject();
-        normalizedMap[toSchemaId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(tolerant);
-
-        JsonDocument instDoc;
-        try
-        {
-            instDoc = JsonDocument.Parse(casted.ToJsonString());
-        }
-        catch (JsonException)
-        {
-            return new GtsInstanceCastResult
-            {
-                Ok = false,
-                InstanceId = trimmed,
-                FromSchemaId = fromGid,
-                ToSchemaId = toSchemaId,
-                FailureReason = "InvalidCastedJson",
-                Comparison = comparison,
-                CastedContent = casted
-            };
-        }
-
-        using (instDoc)
-        {
-            var eval = GtsJsonSchemaEvaluator.Evaluate(instDoc.RootElement, toSchemaId, normalizedMap);
-            if (!eval.IsValid)
-            {
-                return new GtsInstanceCastResult
-                {
-                    Ok = false,
-                    InstanceId = trimmed,
-                    FromSchemaId = fromGid,
-                    ToSchemaId = toSchemaId,
-                    FailureReason = "CastValidationFailed",
-                    Comparison = comparison,
-                    CastedContent = casted,
-                    SchemaValidationErrors = GtsJsonSchemaEvaluator.FlattenErrors(eval)
-                };
-            }
-        }
-
-        return new GtsInstanceCastResult
-        {
-            Ok = true,
-            InstanceId = trimmed,
-            FromSchemaId = fromGid,
-            ToSchemaId = toSchemaId,
-            CastedContent = casted,
-            Comparison = comparison
-        };
-    }
-
-    private static bool EvolutionAllowsCast(GtsId fromSchemaId, GtsId toSchemaId, GtsMinorVersionPairComparison cmp)
-    {
-        if (!cmp.AreMinorVariantPair || cmp.OlderSchemaId is null || cmp.NewerSchemaId is null)
-            return false;
-
-        if (string.Equals(fromSchemaId.Id, toSchemaId.Id, StringComparison.Ordinal))
-            return true;
-
-        var fromIsOlder = string.Equals(fromSchemaId.Id, cmp.OlderSchemaId.Id, StringComparison.Ordinal);
-        var toIsNewer = string.Equals(toSchemaId.Id, cmp.NewerSchemaId.Id, StringComparison.Ordinal);
-        if (fromIsOlder && toIsNewer)
-            return cmp.IsBackwardEvolutionCompatible;
-
-        var fromIsNewer = string.Equals(fromSchemaId.Id, cmp.NewerSchemaId.Id, StringComparison.Ordinal);
-        var toIsOlder = string.Equals(toSchemaId.Id, cmp.OlderSchemaId.Id, StringComparison.Ordinal);
-        if (fromIsNewer && toIsOlder)
-            return cmp.IsForwardEvolutionCompatible;
-
-        return false;
-    }
-
-    /// <summary>Creates an in-memory registry (single-threaded).</summary>
+    /// <summary>Creates an in-memory registry. The in-memory store is thread-safe.</summary>
     public static GtsRegistry InMemory(GtsRegistryConfig config)
     {
-        return InMemoryGtsRegistry.Simple(config);
+        return InMemoryGtsRegistry.Create(config);
     }
 
-    /// <summary>Creates an in-memory registry with thread-safe storage.</summary>
+    /// <summary>
+    /// Creates an in-memory registry. Retained for API compatibility; the in-memory store is always
+    /// thread-safe, so this is equivalent to <see cref="InMemory"/>.
+    /// </summary>
     public static GtsRegistry InMemoryThreadSafe(GtsRegistryConfig config)
     {
-        return InMemoryGtsRegistry.Concurrent(config);
+        return InMemoryGtsRegistry.Create(config);
     }
 }

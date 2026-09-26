@@ -12,7 +12,7 @@ internal static class GtsSchemaMinorVersionCanonicalizer
     internal static JsonObject PrepareForComparison(JsonObject root)
     {
         var normalized = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(root);
-        var clone = JsonNode.Parse(normalized.ToJsonString())!.AsObject();
+        var clone = (JsonObject)normalized.DeepClone();
         RewriteGtsIdentifiersDeep(clone);
         return clone;
     }
@@ -22,27 +22,27 @@ internal static class GtsSchemaMinorVersionCanonicalizer
         switch (node)
         {
             case JsonObject obj:
-            {
-                foreach (var (key, val) in obj.ToList())
                 {
-                    if (key is "$id" or "$ref" && val is JsonValue jv && jv.TryGetValue<string>(out var s)
-                        && !string.IsNullOrEmpty(s))
+                    foreach (var (key, val) in obj.ToList())
                     {
-                        if (TryCanonicalizeUriString(s.Trim(), out var rewritten))
-                            obj[key] = rewritten;
+                        if (key is "$id" or "$ref" && val is JsonValue jv && jv.TryGetValue<string>(out var s)
+                            && !string.IsNullOrEmpty(s))
+                        {
+                            if (TryCanonicalizeUriString(s.Trim(), out var rewritten))
+                                obj[key] = rewritten;
+                        }
+                        else
+                            RewriteGtsIdentifiersDeep(val);
                     }
-                    else
-                        RewriteGtsIdentifiersDeep(val);
-                }
 
-                break;
-            }
+                    break;
+                }
             case JsonArray arr:
-            {
-                foreach (var item in arr)
-                    RewriteGtsIdentifiersDeep(item);
-                break;
-            }
+                {
+                    foreach (var item in arr)
+                        RewriteGtsIdentifiersDeep(item);
+                    break;
+                }
         }
     }
 
@@ -75,7 +75,7 @@ internal static class GtsSchemaMinorVersionCanonicalizer
             return true;
         }
 
-        const string gtsUriScheme = "gts://";
+        const string gtsUriScheme = GtsConstants.UriPrefix;
         if (s.StartsWith(gtsUriScheme, StringComparison.Ordinal))
         {
             var inner = s[gtsUriScheme.Length..];

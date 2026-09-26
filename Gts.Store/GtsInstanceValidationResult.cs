@@ -12,7 +12,7 @@ public sealed class GtsInstanceValidationResult
     public string? Id { get; init; }
 
     /// <summary>High-level failure code when <see cref="Ok"/> is false; null on success.</summary>
-    public string? FailureReason { get; init; }
+    public GtsValidationFailure? FailureReason { get; init; }
 
     /// <summary>Flattened JSON Schema validation messages when <see cref="FailureReason"/> is <c>SchemaValidationFailed</c>.</summary>
     public IReadOnlyList<string>? SchemaErrors { get; init; }

@@ -1,15 +1,17 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Text.Json.Nodes;
 using Gts.Extraction;
 
 namespace Gts.Store.InMemory;
 
-/// <summary>In-memory implementation of <see cref="IGtsStore"/> using a dictionary-like backing store.</summary>
-internal class InMemoryGtsStore<T> : IGtsStore
-    where T : class, IDictionary<GtsId, GtsJsonEntity>, new()
+/// <summary>
+/// Thread-safe in-memory implementation of <see cref="IGtsStore"/>. All access is serialized through a single
+/// lock, so plain dictionaries are sufficient (a concurrent collection would add overhead without changing behavior).
+/// </summary>
+internal sealed class InMemoryGtsStore : IGtsStore
 {
-    private readonly T _entities = new();
-    private readonly ConcurrentDictionary<string, GtsJsonEntity> _instanceKeys = new(StringComparer.Ordinal);
+    private readonly Dictionary<GtsId, GtsJsonEntity> _entities = new();
+    private readonly Dictionary<string, GtsJsonEntity> _instanceKeys = new(StringComparer.Ordinal);
     private readonly object _sync = new();
 
     /// <inheritdoc/>
@@ -17,28 +19,66 @@ internal class InMemoryGtsStore<T> : IGtsStore
     {
         ArgumentNullException.ThrowIfNull(entity);
 
-        var extract = GtsJsonEntity.ExtractId(entity.Content);
-        if (string.IsNullOrEmpty(extract.Id))
-            throw new ArgumentException("Entity must have a resolvable id (GTS id or opaque id such as a UUID).", nameof(entity));
-
+        var key = ResolveKey(entity);
         var stored = entity.DeepClone();
         lock (_sync)
         {
-            if (stored.GtsId is not null)
-            {
-                if (_entities.TryGetValue(stored.GtsId, out var previous))
-                {
-                    var previousId = GtsJsonEntity.ExtractId(previous.Content).Id;
-                    if (!string.IsNullOrEmpty(previousId) && previousId != extract.Id)
-                        _instanceKeys.TryRemove(previousId, out _);
-                }
-                _entities[stored.GtsId] = stored;
-            }
-
-            _instanceKeys[extract.Id] = stored;
+            StoreLocked(stored, key);
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<GtsSaveOutcome> TrySaveAsync(GtsJsonEntity entity)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+
+        var key = ResolveKey(entity);
+        var stored = entity.DeepClone();
+        lock (_sync)
+        {
+            var existing = FindLocked(stored.GtsId, key);
+            if (existing is not null)
+                return ValueTask.FromResult(
+                    JsonNode.DeepEquals(existing.Content, stored.Content)
+                        ? GtsSaveOutcome.Unchanged
+                        : GtsSaveOutcome.Conflict);
+
+            StoreLocked(stored, key);
+            return ValueTask.FromResult(GtsSaveOutcome.Added);
+        }
+    }
+
+    private static string ResolveKey(GtsJsonEntity entity)
+    {
+        var extract = GtsJsonEntity.ExtractId(entity.Content);
+        if (string.IsNullOrEmpty(extract.Id))
+            throw new ArgumentException("Entity must have a resolvable id (GTS id or opaque id such as a UUID).", nameof(entity));
+        return extract.Id;
+    }
+
+    private GtsJsonEntity? FindLocked(GtsId? gtsId, string instanceKey)
+    {
+        if (gtsId is not null && _entities.TryGetValue(gtsId, out var byGts))
+            return byGts;
+        return _instanceKeys.TryGetValue(instanceKey, out var byKey) ? byKey : null;
+    }
+
+    private void StoreLocked(GtsJsonEntity stored, string instanceKey)
+    {
+        if (stored.GtsId is not null)
+        {
+            if (_entities.TryGetValue(stored.GtsId, out var previous))
+            {
+                var previousId = GtsJsonEntity.ExtractId(previous.Content).Id;
+                if (!string.IsNullOrEmpty(previousId) && previousId != instanceKey)
+                    _instanceKeys.Remove(previousId);
+            }
+            _entities[stored.GtsId] = stored;
+        }
+
+        _instanceKeys[instanceKey] = stored;
     }
 
     /// <inheritdoc/>
@@ -82,6 +122,23 @@ internal class InMemoryGtsStore<T> : IGtsStore
             }
 
             return ValueTask.FromResult<IList<GtsJsonEntity>>(list);
+        }
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<GtsJsonEntity>> SnapshotForReadAsync()
+    {
+        lock (_sync)
+        {
+            var seen = new HashSet<GtsJsonEntity>(ReferenceEqualityComparer.Instance);
+            var list = new List<GtsJsonEntity>();
+            foreach (var e in _instanceKeys.Values)
+            {
+                if (seen.Add(e))
+                    list.Add(e);
+            }
+
+            return ValueTask.FromResult<IReadOnlyList<GtsJsonEntity>>(list);
         }
     }
 

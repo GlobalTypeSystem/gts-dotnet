@@ -1,16 +1,16 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Gts;
 using Gts.Extraction;
 using Gts.Store;
+using Microsoft.AspNetCore.Diagnostics;
 
 namespace Gts.Application;
 
 /// <summary>Maps the GTS HTTP API onto <see cref="WebApplication"/> (shared by <c>Gts.Server</c> and CLI <c>server</c>).</summary>
-public static class GtsHttpApiExtensions
+public static partial class GtsHttpApiExtensions
 {
-    private static readonly GtsExtractOptions HttpExtractOptions = new()
+    internal static readonly GtsExtractOptions HttpExtractOptions = new()
     {
         AllowDoubleDollarKeywords = false,
         EntityIdPropertyNames =
@@ -21,6 +21,16 @@ public static class GtsHttpApiExtensions
 
     public static WebApplication MapGtsApi(this WebApplication app, GtsRegistry registry)
     {
+        app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
+        {
+            var error = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+            var (status, message) = error is JsonException or BadHttpRequestException
+                ? (StatusCodes.Status422UnprocessableEntity, "Invalid JSON request body")
+                : (StatusCodes.Status500InternalServerError, "Internal server error");
+            context.Response.StatusCode = status;
+            await context.Response.WriteAsJsonAsync(new { ok = false, error = message }).ConfigureAwait(false);
+        }));
+
         app.MapGet("/entities", async (int? limit) =>
         {
             var l = limit is >= 1 and <= 1000 ? limit.Value : 100;
@@ -46,24 +56,26 @@ public static class GtsHttpApiExtensions
                 id = e.GtsId?.Id ?? id,
                 schema_id = string.IsNullOrEmpty(e.SchemaId) ? null : e.SchemaId,
                 is_schema = e.IsSchema,
-                content = JsonNode.Parse(e.Content.ToJsonString())
+                content = e.Content.DeepClone()
             });
         });
 
         app.MapPost("/entities", async (HttpRequest req) =>
         {
-            var validate = string.Equals(req.Query["validate"], "true", StringComparison.OrdinalIgnoreCase);
+            var validate = string.Equals(req.Query["validate"], "true", StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(req.Query["validation"], "true", StringComparison.OrdinalIgnoreCase);
+            var refValidationMode = NormalizeRefValidationMode(req.Query["gts-ref-validation"]);
             var node = await JsonNode.ParseAsync(req.Body).ConfigureAwait(false);
             if (node is not JsonObject body)
                 return Results.Json(new { ok = false, error = "Body must be a JSON object", is_schema = false, is_type_schema = false },
                     statusCode: StatusCodes.Status422UnprocessableEntity);
 
-            var result = await GtsEntityOperations.TryAddAsync(registry, body, validate, HttpExtractOptions).ConfigureAwait(false);
+            var result = await GtsEntityOperations.TryAddAsync(registry, body, validate, HttpExtractOptions, refValidationMode).ConfigureAwait(false);
             if (!result.Ok)
                 return Results.Json(new { ok = false, error = result.Error, is_schema = result.IsSchema, is_type_schema = result.IsSchema },
-                    statusCode: StatusCodes.Status422UnprocessableEntity);
+                    statusCode: result.Conflict ? StatusCodes.Status409Conflict : StatusCodes.Status422UnprocessableEntity);
 
-            return Results.Json(new { ok = true, id = result.Id, schema_id = result.SchemaId, is_schema = result.IsSchema, is_type_schema = result.IsSchema });
+            return Results.Json(new { ok = true, id = result.Id, type_id = result.SchemaId, schema_id = result.SchemaId, is_schema = result.IsSchema, is_type_schema = result.IsSchema });
         });
 
         app.MapPost("/entities/bulk", async (HttpRequest req) =>
@@ -104,25 +116,10 @@ public static class GtsHttpApiExtensions
                     continue;
                 }
 
-                if (!TryGetString(schema, "$schema", out _))
+                if (!GtsTypeSchema.TryGetDeclaredTypeId(schema, out var typeId, out var identityError))
                 {
                     allOk = false;
-                    results.Add(new { ok = false, type_id = (string?)null, error = "GTS Type Schema must contain a top-level $schema field" });
-                    continue;
-                }
-
-                if (!TryGetString(schema, "$id", out var embeddedId) || !embeddedId.StartsWith("gts://", StringComparison.Ordinal))
-                {
-                    allOk = false;
-                    results.Add(new { ok = false, type_id = (string?)null, error = "GTS Type Schema must contain a top-level $id in gts:// form" });
-                    continue;
-                }
-
-                var typeId = embeddedId["gts://".Length..];
-                if (!GtsId.TryParse(typeId, out var parsed) || parsed is null || !parsed.IsType)
-                {
-                    allOk = false;
-                    results.Add(new { ok = false, type_id = typeId, error = $"Invalid GTS Type Schema $id: '{embeddedId}'" });
+                    results.Add(new { ok = false, type_id = (string?)null, error = identityError });
                     continue;
                 }
 
@@ -226,26 +223,9 @@ public static class GtsHttpApiExtensions
         });
 
         app.MapGet("/match-id-pattern", (string candidate, string pattern) =>
-        {
-            try
-            {
-                if (candidate.Contains('*', StringComparison.Ordinal))
-                {
-                    if (!GtsId.TryParsePattern(candidate, out var cPat) || cPat is null ||
-                        !GtsId.TryParsePattern(pattern, out var pPat) || pPat is null)
-                        return Results.Json(new { candidate, pattern, match = false, error = "invalid pattern" });
-                    return Results.Json(new { candidate, pattern, match = cPat.Matches(pPat) });
-                }
-
-                if (!GtsId.TryParse(candidate, out var cId) || cId is null)
-                    return Results.Json(new { candidate, pattern, match = false, error = "invalid candidate" });
-                return Results.Json(new { candidate, pattern, match = cId.Matches(pattern) });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { candidate, pattern, match = false, error = ex.Message });
-            }
-        });
+            GtsId.TryMatch(candidate, pattern, out var match)
+                ? Results.Json(new { candidate, pattern, match })
+                : Results.Json(new { candidate, pattern, match = false, error = "Invalid candidate or pattern" }));
 
         app.MapGet("/uuid", (string gts_id) =>
         {
@@ -263,14 +243,17 @@ public static class GtsHttpApiExtensions
                 !jv.TryGetValue<string>(out var instanceId))
                 return Results.Json(new { id = "", ok = false, error = "instance_id required" });
 
-            var r = await registry.ValidateInstanceAsync(instanceId).ConfigureAwait(false);
+            var r = await registry.ValidateInstanceAsync(instanceId, refValidationMode: NormalizeRefValidationMode(req.Query["gts-ref-validation"])).ConfigureAwait(false);
             if (r.Ok)
                 return Results.Json(new { id = instanceId, ok = true });
-            return Results.Json(new { id = instanceId, ok = false, error = r.FailureReason ?? "validation failed" });
+            return Results.Json(new { id = instanceId, ok = false, error = InstanceError(r) ?? "validation failed" });
         });
 
         async Task<IResult> ValidateTypeSchema(HttpRequest req)
         {
+            var requestedMode = req.Query["gts-ref-validation"].ToString();
+            if (!GtsRefValidationModes.TryParse(requestedMode, out _))
+                return Results.Json(new { ok = false, error = "Invalid gts-ref-validation mode" }, statusCode: 422);
             var node = await JsonNode.ParseAsync(req.Body).ConfigureAwait(false);
             if (node is not JsonObject body)
                 return Results.Json(new { id = "", ok = false, error = "type_id required" });
@@ -281,12 +264,12 @@ public static class GtsHttpApiExtensions
             if (!GtsId.TryParse(typeId, out var gid) || gid is null || !gid.IsType)
                 return Results.Json(new { id = typeId, ok = false, error = "Invalid GTS Type Schema ID" });
 
-            var validation = await registry.ValidateSchemaAsync(gid).ConfigureAwait(false);
+            var validation = await registry.ValidateSchemaAsync(gid, refValidationMode: NormalizeRefValidationMode(req.Query["gts-ref-validation"])).ConfigureAwait(false);
             if (!validation.Ok)
             {
                 var detail = validation.Errors is { Count: > 0 }
                     ? string.Join("; ", validation.Errors)
-                    : (validation.FailureReason ?? "validation failed");
+                    : (validation.FailureReason?.ToWire() ?? "validation failed");
                 return Results.Json(new { id = typeId, ok = false, error = detail });
             }
 
@@ -307,21 +290,21 @@ public static class GtsHttpApiExtensions
             if (entityId.EndsWith("~", StringComparison.Ordinal))
                 return await ValidateSchemaBody(entityId).ConfigureAwait(false);
 
-            var r = await registry.ValidateInstanceAsync(entityId).ConfigureAwait(false);
+            var r = await registry.ValidateInstanceAsync(entityId, refValidationMode: NormalizeRefValidationMode(req.Query["gts-ref-validation"])).ConfigureAwait(false);
             return r.Ok
                 ? Results.Json(new { id = entityId, ok = true, entity_type = "instance" })
-                : Results.Json(new { id = entityId, ok = false, entity_type = "instance", error = r.FailureReason ?? "validation failed" });
+                : Results.Json(new { id = entityId, ok = false, entity_type = "instance", error = InstanceError(r) ?? "validation failed" });
 
             async Task<IResult> ValidateSchemaBody(string sid)
             {
                 if (!GtsId.TryParse(sid, out var gid) || gid is null)
                     return Results.Json(new { id = sid, ok = false, entity_type = "schema", error = "Invalid id" });
-                var vr = await registry.ValidateSchemaAsync(gid).ConfigureAwait(false);
+                var vr = await registry.ValidateSchemaAsync(gid, refValidationMode: NormalizeRefValidationMode(req.Query["gts-ref-validation"])).ConfigureAwait(false);
                 if (!vr.Ok)
                 {
                     var detail = vr.Errors is { Count: > 0 }
                         ? string.Join("; ", vr.Errors)
-                        : (vr.FailureReason ?? "validation failed");
+                        : (vr.FailureReason?.ToWire() ?? "validation failed");
                     return Results.Json(new { id = sid, ok = false, entity_type = "schema", error = detail });
                 }
 
@@ -362,8 +345,10 @@ public static class GtsHttpApiExtensions
                 return Results.Json(new { detail = new[] { new { loc = new[] { "body" }, msg = "Request body must be a JSON object", type = "type_error.object" } } }, statusCode: 422);
 
             var typeId = Uri.UnescapeDataString(gtsType);
-            if (!GtsId.TryParse(typeId, out var schemaId) || schemaId is null || !schemaId.IsType)
+            if (!GtsId.TryParse(typeId, out var schemaId) || schemaId is null)
                 return Results.Json(new { ok = false, id = (string?)null, type_id = typeId, is_type_schema = false, error = $"Invalid GTS Type Schema ID: '{typeId}'" });
+            if (!schemaId.IsType)
+                return Results.Json(new { ok = false, id = (string?)null, type_id = typeId, is_type_schema = false, error = "Registered entity must be GTS Type schema" });
 
             var entity = GtsJsonEntity.ExtractEntity(body, HttpExtractOptions);
             var id = entity.GtsId?.Id;
@@ -382,166 +367,11 @@ public static class GtsHttpApiExtensions
             return Results.Json(graph);
         });
 
-        app.MapGet("/compatibility", async (string old_schema_id, string new_schema_id) =>
-        {
-            if (!GtsId.TryParse(old_schema_id, out var o) || o is null || !GtsId.TryParse(new_schema_id, out var n) || n is null)
-                return Results.Json(new
-                {
-                    old = old_schema_id,
-                    @new = new_schema_id,
-                    is_backward_compatible = false,
-                    is_forward_compatible = false,
-                    is_fully_compatible = false,
-                    backward_errors = new[] { "Invalid id" },
-                    forward_errors = new[] { "Invalid id" }
-                });
-
-            var a = await registry.GetAsync(o).ConfigureAwait(false);
-            var b = await registry.GetAsync(n).ConfigureAwait(false);
-            if (a is null || b is null || !a.IsSchema || !b.IsSchema)
-                return Results.Json(new
-                {
-                    old = old_schema_id,
-                    @new = new_schema_id,
-                    is_backward_compatible = false,
-                    is_forward_compatible = false,
-                    is_fully_compatible = false,
-                    backward_errors = new[] { "Schema not found" },
-                    forward_errors = new[] { "Schema not found" }
-                });
-
-            var oldFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(a.Content);
-            var newFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(b.Content);
-            var (backOk, backErr) = GtsJsonSchemaEvolutionCompatibility.CheckBackward(oldFlat, newFlat);
-            var (fwdOk, fwdErr) = GtsJsonSchemaEvolutionCompatibility.CheckForward(oldFlat, newFlat);
-
-            return Results.Json(new
-            {
-                old = old_schema_id,
-                @new = new_schema_id,
-                is_backward_compatible = backOk,
-                is_forward_compatible = fwdOk,
-                is_fully_compatible = backOk && fwdOk,
-                backward_errors = backErr,
-                forward_errors = fwdErr
-            });
-        });
-
-        app.MapPost("/cast", async (HttpRequest req) =>
-        {
-            var node = await JsonNode.ParseAsync(req.Body).ConfigureAwait(false);
-            if (node is not JsonObject body)
-                return Results.Json(new { error = "instance_id required" });
-            if (!body.TryGetPropertyValue("instance_id", out var i) || i is not JsonValue iv || !iv.TryGetValue<string>(out var instanceId))
-                return Results.Json(new { error = "instance_id required" });
-            if (!body.TryGetPropertyValue("to_schema_id", out var t) || t is not JsonValue tv || !tv.TryGetValue<string>(out var toSchemaId))
-                return Results.Json(new { error = "to_schema_id required" });
-
-            if (!GtsId.TryParse(toSchemaId, out var toGid) || toGid is null || !toGid.IsType)
-                return Results.Json(new { error = "Invalid target schema id" });
-
-            var result = await registry.CastInstanceAsync(instanceId, toGid).ConfigureAwait(false);
-            if (!result.Ok)
-            {
-                return Results.Json(new
-                {
-                    error = result.FailureReason,
-                    instance_id = result.InstanceId,
-                    from_schema_id = result.FromSchemaId?.Id,
-                    to_schema_id = result.ToSchemaId?.Id,
-                    schema_validation_errors = result.SchemaValidationErrors,
-                    casted_entity = result.CastedContent is null ? null : JsonNode.Parse(result.CastedContent.ToJsonString()),
-                    are_minor_variant_pair = result.Comparison?.AreMinorVariantPair,
-                    is_structurally_compatible = result.Comparison?.IsStructurallyCompatible,
-                    is_backward_compatible = result.Comparison?.IsBackwardEvolutionCompatible,
-                    is_forward_compatible = result.Comparison?.IsForwardEvolutionCompatible
-                });
-            }
-
-            return Results.Json(new
-            {
-                casted_entity = JsonNode.Parse(result.CastedContent!.ToJsonString()),
-                is_backward_compatible = result.Comparison!.IsBackwardEvolutionCompatible,
-                is_forward_compatible = result.Comparison.IsForwardEvolutionCompatible,
-                is_structurally_compatible = result.Comparison.IsStructurallyCompatible
-            });
-        });
-
-        app.MapGet("/query", async (string expr, int? limit) =>
-        {
-            var lim = limit is >= 1 and <= 1000 ? limit!.Value : 100;
-            var result = await GtsQueryEngine.ExecuteAsync(registry, expr, lim).ConfigureAwait(false);
-            if (result.Error is not null)
-                return Results.Json(new { error = result.Error, results = Array.Empty<object>(), limit = lim });
-            return Results.Json(new { results = result.Results, count = result.Results.Count, limit = lim });
-        });
+        GtsOperationEndpoints.Map(app, registry);
 
         app.MapGet("/openapi", (HttpRequest req) =>
             Results.Json(GtsOpenApiSpec.Build(req.Host.Host, req.Host.Port ?? (req.IsHttps ? 443 : 80))));
 
-        app.MapGet("/attr", async (string gts_with_path) =>
-        {
-            var r = await registry.GetAttributeAsync(gts_with_path).ConfigureAwait(false);
-            if (!r.Resolved)
-            {
-                return Results.Json(new
-                {
-                    resolved = false,
-                    error = r.Error,
-                    available_fields = r.AvailableFields
-                });
-            }
-
-            var val = r.Value;
-            return val switch
-            {
-                JsonValue jv when jv.TryGetValue<string>(out var s) => Results.Json(new { resolved = true, value = s }),
-                JsonValue jv when jv.TryGetValue<bool>(out var b) => Results.Json(new { resolved = true, value = b }),
-                JsonValue jv when jv.TryGetValue<int>(out var ni) => Results.Json(new { resolved = true, value = ni }),
-                JsonValue jv when jv.TryGetValue<double>(out var nd) => Results.Json(new { resolved = true, value = nd }),
-                JsonValue jv when jv.TryGetValue<decimal>(out var nm) => Results.Json(new { resolved = true, value = nm }),
-                _ => Results.Json(new { resolved = true, value = val is null ? null : JsonNode.Parse(val.ToJsonString()) })
-            };
-        });
-
         return app;
-    }
-
-    private static bool TryGetString(JsonObject obj, string name, out string value)
-    {
-        value = "";
-        if (!obj.TryGetPropertyValue(name, out var node) || node is not JsonValue jsonValue ||
-            !jsonValue.TryGetValue<string>(out var parsed) || string.IsNullOrEmpty(parsed))
-            return false;
-        value = parsed;
-        return true;
-    }
-
-    private static string? InstanceError(GtsInstanceValidationResult result)
-    {
-        if (result.Ok)
-            return null;
-        if (result.SchemaErrors is { Count: > 0 })
-        {
-            var error = string.Join("; ", result.SchemaErrors);
-            return Regex.Replace(error, "Value is \\\"[^\\\"]+\\\" but should be \\\"([^\\\"]+)\\\"", "is not of type '$1'");
-        }
-        return result.FailureReason switch
-        {
-            "SchemaNotFound" => "GTS Type Schema not found",
-            "NotASchema" => "Registered entity must be GTS Type schema",
-            _ => result.FailureReason ?? "Validation failed"
-        };
-    }
-
-    private static string? SchemaError(GtsSchemaValidationResult result)
-    {
-        if (result.Ok)
-            return null;
-        if (result.Errors is { Count: > 0 })
-            return string.Join("; ", result.Errors);
-        return result.FailureReason == "PrecedentIncompatible"
-            ? "Parent GTS Type Schema not found"
-            : result.FailureReason ?? "JSON Schema validation failed";
     }
 }
