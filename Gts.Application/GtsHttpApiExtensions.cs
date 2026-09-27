@@ -101,6 +101,14 @@ public static partial class GtsHttpApiExtensions
 
         app.MapPost("/type-schemas", async (HttpRequest req) =>
         {
+            // ?validate / ?gts-ref-validation apply to every batch entry exactly
+            // as on POST /entities; a bogus gts-ref-validation is rejected before
+            // any entry is registered.
+            var validate = string.Equals(req.Query["validate"], "true", StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(req.Query["validation"], "true", StringComparison.OrdinalIgnoreCase);
+            if (!GtsRefValidationModes.TryParse(req.Query["gts-ref-validation"].ToString(), out var refValidationMode))
+                return Results.Json(new { ok = false, error = "Invalid gts-ref-validation mode" }, statusCode: 422);
+
             var node = await JsonNode.ParseAsync(req.Body).ConfigureAwait(false);
             if (node is not JsonArray schemas)
                 return Results.Json(new { ok = false, error = "Request body must be a JSON array of GTS Type Schemas" }, statusCode: 422);
@@ -123,7 +131,7 @@ public static partial class GtsHttpApiExtensions
                     continue;
                 }
 
-                var result = await GtsEntityOperations.TryAddAsync(registry, schema, validate: false, HttpExtractOptions).ConfigureAwait(false);
+                var result = await GtsEntityOperations.TryAddAsync(registry, schema, validate, HttpExtractOptions, refValidationMode).ConfigureAwait(false);
                 if (!result.Ok)
                     allOk = false;
                 results.Add(new { ok = result.Ok, type_id = typeId, error = result.Error });
