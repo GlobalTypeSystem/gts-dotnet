@@ -7,7 +7,7 @@ public sealed class ParseResult
     public static readonly ParseResult Success = new();
     /// <summary>Indicates null input was passed.</summary>
     public static readonly ParseResult ArgumentIsNull = new(); // TODO: actual error message
-    
+
     /// <summary>Returns true when this result represents success.</summary>
     public static implicit operator bool(ParseResult result)
     {

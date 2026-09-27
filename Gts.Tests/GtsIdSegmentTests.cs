@@ -21,7 +21,7 @@ public class GtsIdSegmentTests
             Vendor = "vendor",
             Package = "pkg"
         };
-        
+
         Assert.Equal("vendor.pkg.*", segment.ToString());
     }
 
@@ -34,7 +34,7 @@ public class GtsIdSegmentTests
             Package = "pkg",
             Namespace = "ns"
         };
-        
+
         Assert.Equal("vendor.pkg.ns.*", segment.ToString());
     }
 
@@ -48,7 +48,7 @@ public class GtsIdSegmentTests
             Namespace = "ns",
             Type = "type"
         };
-        
+
         Assert.Equal("vendor.pkg.ns.type.*", segment.ToString());
     }
 
@@ -63,7 +63,7 @@ public class GtsIdSegmentTests
             Type = "type",
             VersionMajor = 1,
         };
-        
+
         Assert.Equal("vendor.pkg.ns.type.v1", segment.ToString());
     }
 
@@ -79,7 +79,7 @@ public class GtsIdSegmentTests
             VersionMajor = 1,
             VersionMinor = 2,
         };
-        
+
         Assert.Equal("vendor.pkg.ns.type.v1.2", segment.ToString());
     }
 }

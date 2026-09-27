@@ -18,7 +18,7 @@ public class GtsIdTests
     public void CanBeParsedAsMultipleSegmentsType()
     {
         var id = GtsId.Parse("gts.vendor.package.namespace.type.v1.0~vendor2.package2.namespace2.type2.v1.0~");
-        
+
         Assert.True(id.IsType);
         Assert.Equal(2, id.Segments.Count);
     }
@@ -31,7 +31,7 @@ public class GtsIdTests
         Assert.True(id.IsInstance);
         Assert.Equal(2, id.Segments.Count);
     }
-    
+
     [Fact]
     public void CanBeParsedAsSingleSegmentPattern()
     {
@@ -47,33 +47,33 @@ public class GtsIdTests
     public void CanBeParsedAsMultipleSegmentsPattern()
     {
         var id = GtsId.ParsePattern("gts.vendor.package.namespace.type.v1.0~vendor2.package2.namespace2.type2.*");
-        
+
         Assert.False(id.IsType);
         Assert.False(id.IsInstance);
         Assert.True(id.IsPattern);
         Assert.Equal(2, id.Segments.Count);
     }
-    
+
     [Fact]
     public void CannotBeParsedWithTrailingStringCharacters()
     {
         var str = "gts.vendor.package.namespace.type.v1.0~ ";
-        
+
         Assert.False(GtsId.TryParse(str, out _));
         Assert.Throws<ParseException>(() => GtsId.Parse(str));
-        
+
         Assert.False(GtsId.TryParsePattern(str, out _));
         Assert.Throws<ParseException>(() => GtsId.ParsePattern(str));
     }
-    
+
     [Fact]
     public void CannotBeParsedWithNullAsInput()
     {
         string? str = null;
-        
+
         Assert.False(GtsId.TryParse(str, out _));
         Assert.Throws<ParseException>(() => GtsId.Parse(str));
-        
+
         Assert.False(GtsId.TryParsePattern(str, out _));
         Assert.Throws<ParseException>(() => GtsId.ParsePattern(str));
     }
@@ -83,7 +83,7 @@ public class GtsIdTests
     {
         var id = GtsId.Parse("gts.vendor.package.namespace.type.v1.0~");
         var guid = id.ToGuid();
-        
+
         Assert.Equal(GuidUtils.Create(GuidUtils.GtsNamespace, id.Id), guid);
     }
 
@@ -110,7 +110,7 @@ public class GtsIdTests
     {
         var str = "gts.vendor.package.namespace.type.v1.0~vendor2.package2.namespace2.type2.v1.0";
         var id = GtsId.Parse(str);
-        
+
         Assert.Equal(
             StringComparer.Ordinal.GetHashCode(str),
             id.GetHashCode());
@@ -121,11 +121,11 @@ public class GtsIdTests
     {
         var str1 = "gts.vendor.package.namespace.type.v1.0~vendor1.package1.namespace1.type1.v1.0";
         var str2 = "gts.vendor.package.namespace.type.v1.0~vendor2.package2.namespace2.type2.v1.0";
-        
+
         var id1 = GtsId.Parse(str1);
         var id12 = GtsId.Parse(str1);
         var id2 = GtsId.Parse(str2);
-        
+
         Assert.Equal(id1, id12);
         Assert.NotEqual(id1, id2);
     }

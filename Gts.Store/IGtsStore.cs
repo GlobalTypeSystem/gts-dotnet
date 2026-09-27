@@ -27,7 +27,7 @@ public interface IGtsStore
     /// different content for the same id cannot both succeed.
     /// </summary>
     ValueTask<GtsSaveOutcome> TrySaveAsync(GtsJsonEntity entity);
-    
+
     /// <summary>Retrieves an entity by GTS ID, or null if not found.</summary>
     ValueTask<GtsJsonEntity?> GetAsync(GtsId id);
 
@@ -35,7 +35,7 @@ public interface IGtsStore
     /// Looks up an instance by GTS instance id or by an opaque id (e.g. UUID for anonymous instances).
     /// </summary>
     ValueTask<GtsJsonEntity?> GetByInstanceIdAsync(string instanceId);
-    
+
     /// <summary>Returns all stored entities, including instances without a <see cref="GtsJsonEntity.GtsId"/> (e.g. opaque ids).</summary>
     ValueTask<IList<GtsJsonEntity>> GetAllAsync();
 

@@ -15,7 +15,7 @@ internal static class Parsers
 
     internal static readonly Parser<char, string> Wildcard =
         String("*").Labelled(nameof(Wildcard));
-    
+
     internal static readonly Parser<char, char> V =
         Char('v').Labelled(nameof(V));
 
@@ -53,10 +53,10 @@ internal static class Parsers
     internal static readonly Parser<char, string> IdentifierOrWildcard =
         Wildcard.Or(Identifier)
             .Labelled(nameof(Identifier));
-    
+
     internal static readonly Parser<char, string> GtsPrefix =
         String("gts").Labelled(nameof(GtsPrefix));
-    
+
     internal static readonly Parser<char, string> Vendor =
         Identifier.Labelled(nameof(Vendor));
     internal static readonly Parser<char, string> Package =
@@ -65,7 +65,7 @@ internal static class Parsers
         Identifier.Labelled(nameof(Namespace));
     internal static readonly Parser<char, string> Type =
         Identifier.Labelled(nameof(Type));
-    
+
     internal static readonly Parser<char, SegmentInfo> Segment =
         Vendor.Before(Dot)
             .Then(Package.Before(Dot), (vendor, package) => (vendor, package))
@@ -80,7 +80,7 @@ internal static class Parsers
                     version,
                     false))
             .Labelled(nameof(Segment));
-    
+
     internal static readonly Parser<char, SegmentInfo> Pattern =
         Vendor.Before(Dot).Optional()
             .Then(Package.Before(Dot).Optional(), (vendor, package) => (vendor, package))
@@ -117,7 +117,7 @@ internal static class Parsers
             .Then(Segment.SeparatedAtLeastOnce(Tilde),
                 (_, segments) => new IdentifierInfo(IdentifierKind.Instance, segments))
             .Before(End);
-    
+
     internal static readonly Parser<char, IdentifierInfo> GtsPattern =
         GtsPrefix.Then(Dot)
             .Then(Pattern.SeparatedAndOptionallyTerminatedAtLeastOnce(Tilde),
@@ -160,7 +160,7 @@ internal static class Parsers
         Instance,
         Pattern,
     }
-    
+
     /// <summary>Parsed identifier with kind and segment list.</summary>
     internal record struct IdentifierInfo(
         IdentifierKind Kind, IEnumerable<SegmentInfo> Segments) : IEnumerable<SegmentInfo>
@@ -171,7 +171,7 @@ internal static class Parsers
         public bool IsInstance => Kind == IdentifierKind.Instance;
         /// <summary>True if this is a pattern.</summary>
         public bool IsPattern => Kind == IdentifierKind.Pattern;
-        
+
         /// <inheritdoc/>
         public IEnumerator<SegmentInfo> GetEnumerator() => Segments.GetEnumerator();
         /// <inheritdoc/>
