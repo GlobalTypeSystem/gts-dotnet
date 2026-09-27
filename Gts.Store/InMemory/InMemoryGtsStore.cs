@@ -14,9 +14,13 @@ internal sealed class InMemoryGtsStore : IGtsStore
     private readonly Dictionary<string, GtsJsonEntity> _instanceKeys = new(StringComparer.Ordinal);
     // Staging overlay: entities registered but not yet committed. Visible to internal validation
     // (via SnapshotForReadAsync) so a batch resolves intra-batch references regardless of order, but
-    // invisible to public reads until CommitStagedAsync. Keyed by the resolved instance key.
-    private readonly Dictionary<string, GtsJsonEntity> _staged = new(StringComparer.Ordinal);
+    // invisible to public reads until CommitStagedAsync. Keyed by a unique staging TOKEN (not the
+    // resolved instance key) so two entries that resolve to the same id - a duplicated batch entry or
+    // two concurrent batches - never clobber each other, and commit/discard only affect their own entry.
+    private readonly Dictionary<string, StagedEntry> _staged = new(StringComparer.Ordinal);
     private readonly object _sync = new();
+
+    private readonly record struct StagedEntry(string Key, GtsJsonEntity Entity);
 
     /// <inheritdoc/>
     public ValueTask SaveAsync(GtsJsonEntity entity)
@@ -137,8 +141,8 @@ internal sealed class InMemoryGtsStore : IGtsStore
             // Committed entities overlaid with the staging area (staged wins for the same key),
             // so a schema being validated as part of a batch resolves its staged siblings.
             var byKey = new Dictionary<string, GtsJsonEntity>(_instanceKeys, StringComparer.Ordinal);
-            foreach (var kv in _staged)
-                byKey[kv.Key] = kv.Value;
+            foreach (var entry in _staged.Values)
+                byKey[entry.Key] = entry.Entity;
 
             var seen = new HashSet<GtsJsonEntity>(ReferenceEqualityComparer.Instance);
             var list = new List<GtsJsonEntity>();
@@ -175,32 +179,44 @@ internal sealed class InMemoryGtsStore : IGtsStore
         ArgumentNullException.ThrowIfNull(entity);
         var key = ResolveKey(entity);
         var stored = entity.DeepClone();
+        var token = Guid.NewGuid().ToString("N");
         lock (_sync)
         {
-            _staged[key] = stored;
+            _staged[token] = new StagedEntry(key, stored);
         }
 
-        return ValueTask.FromResult(key);
+        return ValueTask.FromResult(token);
     }
 
     /// <inheritdoc/>
-    public ValueTask CommitStagedAsync(string key)
+    public ValueTask<GtsSaveOutcome> CommitStagedAsync(string token)
     {
         lock (_sync)
         {
-            if (_staged.Remove(key, out var stored))
-                StoreLocked(stored, key);
-        }
+            if (!_staged.Remove(token, out var entry))
+                return ValueTask.FromResult(GtsSaveOutcome.Conflict);
 
-        return ValueTask.CompletedTask;
+            // Atomically re-check against the committed store (the same compare-and-swap as
+            // TrySaveAsync) so a concurrent commit of the same id, or an intra-batch duplicate,
+            // cannot silently overwrite already-committed content.
+            var existing = FindLocked(entry.Entity.GtsId, entry.Key);
+            if (existing is not null)
+                return ValueTask.FromResult(
+                    JsonNode.DeepEquals(existing.Content, entry.Entity.Content)
+                        ? GtsSaveOutcome.Unchanged
+                        : GtsSaveOutcome.Conflict);
+
+            StoreLocked(entry.Entity, entry.Key);
+            return ValueTask.FromResult(GtsSaveOutcome.Added);
+        }
     }
 
     /// <inheritdoc/>
-    public ValueTask DiscardStagedAsync(string key)
+    public ValueTask DiscardStagedAsync(string token)
     {
         lock (_sync)
         {
-            _staged.Remove(key);
+            _staged.Remove(token);
         }
 
         return ValueTask.CompletedTask;

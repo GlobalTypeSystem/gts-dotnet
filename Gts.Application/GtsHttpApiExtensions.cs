@@ -144,64 +144,102 @@ public static partial class GtsHttpApiExtensions
 
             // validate=true: two-phase so the outcome is order-independent and nothing invalid is ever
             // published. Stage every structurally-valid entry (invisible to public reads), validate each
-            // against the fully-staged set (so intra-batch references/ancestors resolve regardless of
-            // order), then commit the entries that passed and discard the ones that failed.
-            var staged = new List<(int Index, string TypeId, GtsJsonEntity Entity, string Key)>();
-            for (var i = 0; i < schemas.Count; i++)
+            // against the staged set (so intra-batch references/ancestors resolve regardless of order),
+            // then commit the entries that passed and discard the ones that failed. Every staged token is
+            // tracked so a throw anywhere below still discards the leftovers in the finally block instead
+            // of leaking unvalidated entries into the internal read overlay.
+            var staged = new List<(int Index, string TypeId, GtsJsonEntity Entity, string Token)>();
+            var pending = new HashSet<string>(StringComparer.Ordinal);
+            try
             {
-                if (schemas[i] is not JsonObject schema)
+                for (var i = 0; i < schemas.Count; i++)
                 {
-                    results[i] = new { ok = false, type_id = (string?)null, error = "GTS Type Schema entry must be a JSON object" };
-                    allOk = false;
-                    continue;
+                    if (schemas[i] is not JsonObject schema)
+                    {
+                        results[i] = new { ok = false, type_id = (string?)null, error = "GTS Type Schema entry must be a JSON object" };
+                        allOk = false;
+                        continue;
+                    }
+                    if (!GtsTypeSchema.TryGetDeclaredTypeId(schema, out var typeId, out var identityError))
+                    {
+                        results[i] = new { ok = false, type_id = (string?)null, error = identityError };
+                        allOk = false;
+                        continue;
+                    }
+                    var (entity, prepError) = GtsEntityOperations.PrepareSchema(schema, HttpExtractOptions);
+                    if (entity is null)
+                    {
+                        results[i] = new { ok = false, type_id = (string?)typeId, error = prepError };
+                        allOk = false;
+                        continue;
+                    }
+                    // Reject a conflicting re-registration against the committed store before staging.
+                    var existing = entity.GtsId is not null ? await registry.GetAsync(entity.GtsId).ConfigureAwait(false) : null;
+                    if (existing is not null && !JsonNode.DeepEquals(existing.Content, entity.Content))
+                    {
+                        results[i] = new { ok = false, type_id = (string?)typeId, error = "Entity already exists with different content" };
+                        allOk = false;
+                        continue;
+                    }
+                    var token = await registry.StageAsync(entity).ConfigureAwait(false);
+                    pending.Add(token);
+                    staged.Add((i, typeId, entity, token));
                 }
-                if (!GtsTypeSchema.TryGetDeclaredTypeId(schema, out var typeId, out var identityError))
-                {
-                    results[i] = new { ok = false, type_id = (string?)null, error = identityError };
-                    allOk = false;
-                    continue;
-                }
-                var (entity, prepError) = GtsEntityOperations.PrepareSchema(schema, HttpExtractOptions);
-                if (entity is null)
-                {
-                    results[i] = new { ok = false, type_id = (string?)typeId, error = prepError };
-                    allOk = false;
-                    continue;
-                }
-                // Reject a conflicting re-registration against the committed store before staging.
-                var existing = entity.GtsId is not null ? await registry.GetAsync(entity.GtsId).ConfigureAwait(false) : null;
-                if (existing is not null && !JsonNode.DeepEquals(existing.Content, entity.Content))
-                {
-                    results[i] = new { ok = false, type_id = (string?)typeId, error = "Entity already exists with different content" };
-                    allOk = false;
-                    continue;
-                }
-                var key = await registry.StageAsync(entity).ConfigureAwait(false);
-                staged.Add((i, typeId, entity, key));
-            }
 
-            // Phase 2: validate each staged entry against the fully-staged set.
-            var verdicts = new List<(int Index, string TypeId, string Key, string? Error)>();
-            foreach (var (index, typeId, entity, key) in staged)
-            {
-                var error = await GtsEntityOperations.ValidateStagedSchemaAsync(registry, entity, refValidationMode).ConfigureAwait(false);
-                verdicts.Add((index, typeId, key, error));
-            }
+                // Phase 2: validate the staged entries, discarding failures and RE-validating the
+                // survivors against the now-smaller staged set until a round produces no new failures.
+                // This stops an entry that only validated because a sibling was staged (e.g. its parent
+                // or $ref target) from being committed after that sibling has itself been discarded.
+                var survivors = staged;
+                while (true)
+                {
+                    var stillGood = new List<(int Index, string TypeId, GtsJsonEntity Entity, string Token)>(survivors.Count);
+                    var failedThisRound = new List<(int Index, string TypeId, string Token, string Error)>();
+                    foreach (var (index, typeId, entity, token) in survivors)
+                    {
+                        var error = await GtsEntityOperations.ValidateStagedSchemaAsync(registry, entity, refValidationMode).ConfigureAwait(false);
+                        if (error is null)
+                            stillGood.Add((index, typeId, entity, token));
+                        else
+                            failedThisRound.Add((index, typeId, token, error));
+                    }
 
-            // Phase 3: publish the entries that passed, discard the ones that failed.
-            foreach (var (index, typeId, key, error) in verdicts)
+                    if (failedThisRound.Count == 0)
+                        break;
+
+                    foreach (var (index, typeId, token, error) in failedThisRound)
+                    {
+                        await registry.DiscardStagedAsync(token).ConfigureAwait(false);
+                        pending.Remove(token);
+                        results[index] = new { ok = false, type_id = (string?)typeId, error = (string?)error };
+                        allOk = false;
+                    }
+                    survivors = stillGood;
+                }
+
+                // Phase 3: publish the entries that passed. A commit can still report a conflict if a
+                // concurrent batch committed the same id with different content in the meantime.
+                foreach (var (index, typeId, _, token) in survivors)
+                {
+                    var outcome = await registry.CommitStagedAsync(token).ConfigureAwait(false);
+                    pending.Remove(token);
+                    if (outcome == GtsSaveOutcome.Conflict)
+                    {
+                        results[index] = new { ok = false, type_id = (string?)typeId, error = (string?)"Entity already exists with different content" };
+                        allOk = false;
+                    }
+                    else
+                    {
+                        results[index] = new { ok = true, type_id = (string?)typeId, error = (string?)null };
+                    }
+                }
+            }
+            finally
             {
-                if (error is null)
-                {
-                    await registry.CommitStagedAsync(key).ConfigureAwait(false);
-                    results[index] = new { ok = true, type_id = (string?)typeId, error = (string?)null };
-                }
-                else
-                {
-                    await registry.DiscardStagedAsync(key).ConfigureAwait(false);
-                    results[index] = new { ok = false, type_id = (string?)typeId, error = (string?)error };
-                    allOk = false;
-                }
+                // Discard anything still staged (e.g. a validation call threw) so no unvalidated entry
+                // lingers in the staging overlay.
+                foreach (var token in pending)
+                    await registry.DiscardStagedAsync(token).ConfigureAwait(false);
             }
 
             return Results.Json(new { ok = allOk, results });

@@ -67,7 +67,7 @@ public abstract class GtsRegistry
 
     /// <summary>
     /// Stages an entity WITHOUT publishing it (invisible to public reads until <see cref="CommitStagedAsync"/>),
-    /// returning its staged key. Used by validate=true registration so an entity that has not yet passed
+    /// returning a unique staging token. Used by validate=true registration so an entity that has not yet passed
     /// validation is never observable, and so a batch can resolve intra-batch references regardless of order.
     /// </summary>
     public ValueTask<string> StageAsync(GtsJsonEntity entity)
@@ -75,16 +75,19 @@ public abstract class GtsRegistry
         return _store.StageAsync(entity);
     }
 
-    /// <summary>Publishes a previously staged entity by its staged key.</summary>
-    public ValueTask CommitStagedAsync(string key)
+    /// <summary>
+    /// Publishes a previously staged entity by its staging token, atomically re-checking for a conflicting
+    /// committed entity and reporting the <see cref="GtsSaveOutcome"/>.
+    /// </summary>
+    public ValueTask<GtsSaveOutcome> CommitStagedAsync(string token)
     {
-        return _store.CommitStagedAsync(key);
+        return _store.CommitStagedAsync(token);
     }
 
-    /// <summary>Discards a staged entity by its staged key; the committed state is untouched.</summary>
-    public ValueTask DiscardStagedAsync(string key)
+    /// <summary>Discards a staged entity by its staging token; the committed state is untouched.</summary>
+    public ValueTask DiscardStagedAsync(string token)
     {
-        return _store.DiscardStagedAsync(key);
+        return _store.DiscardStagedAsync(token);
     }
 
     /// <summary>

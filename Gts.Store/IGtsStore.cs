@@ -56,19 +56,29 @@ public interface IGtsStore
     ValueTask<IReadOnlyList<GtsJsonEntity>> SnapshotCommittedForReadAsync();
 
     /// <summary>
-    /// Stages an entity WITHOUT publishing it, returning its registry key. A staged entity is visible to
+    /// Stages an entity WITHOUT publishing it, returning a <strong>unique staging token</strong> that
+    /// identifies this staged entry (never its registry key). A staged entity is visible to
     /// internal validation via <see cref="SnapshotForReadAsync"/> (so a batch resolves intra-batch references
     /// regardless of order) but invisible to public reads (<see cref="GetAsync"/>, <see cref="GetByInstanceIdAsync"/>,
     /// <see cref="GetAllAsync"/>, <see cref="SnapshotCommittedForReadAsync"/>) until <see cref="CommitStagedAsync"/>.
-    /// Callers MUST eventually commit or discard the staged key.
+    /// Because each stage yields its own token, two entries that resolve to the same id - whether from a
+    /// duplicated batch entry or two concurrent batches - never clobber each other's staged content, and a
+    /// commit/discard only ever affects the entry it names. Callers MUST eventually commit or discard the token.
     /// </summary>
     ValueTask<string> StageAsync(GtsJsonEntity entity);
 
-    /// <summary>Publishes a previously staged entity (by its staged key), making it visible to public reads.</summary>
-    ValueTask CommitStagedAsync(string key);
+    /// <summary>
+    /// Publishes a previously staged entity by its staging <paramref name="token"/>, making it visible to
+    /// public reads. The publish is atomic with a conflict check against the committed store (the same
+    /// compare-and-swap as <see cref="TrySaveAsync"/>): <see cref="GtsSaveOutcome.Added"/> when it was
+    /// inserted, <see cref="GtsSaveOutcome.Unchanged"/> when an identical entity already held the id, and
+    /// <see cref="GtsSaveOutcome.Conflict"/> when a different entity already held the id (nothing is
+    /// published in that case). An unknown/already-resolved token yields <see cref="GtsSaveOutcome.Conflict"/>.
+    /// </summary>
+    ValueTask<GtsSaveOutcome> CommitStagedAsync(string token);
 
-    /// <summary>Drops a staged entity (by its staged key). The committed state is untouched.</summary>
-    ValueTask DiscardStagedAsync(string key);
+    /// <summary>Drops a staged entity by its staging token. The committed state is untouched.</summary>
+    ValueTask DiscardStagedAsync(string token);
 
     /// <summary>Returns the number of stored entities.</summary>
     ValueTask<int> CountAsync();
