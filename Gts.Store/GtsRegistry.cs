@@ -66,6 +66,28 @@ public abstract class GtsRegistry
     }
 
     /// <summary>
+    /// Stages an entity WITHOUT publishing it (invisible to public reads until <see cref="CommitStagedAsync"/>),
+    /// returning its staged key. Used by validate=true registration so an entity that has not yet passed
+    /// validation is never observable, and so a batch can resolve intra-batch references regardless of order.
+    /// </summary>
+    public ValueTask<string> StageAsync(GtsJsonEntity entity)
+    {
+        return _store.StageAsync(entity);
+    }
+
+    /// <summary>Publishes a previously staged entity by its staged key.</summary>
+    public ValueTask CommitStagedAsync(string key)
+    {
+        return _store.CommitStagedAsync(key);
+    }
+
+    /// <summary>Discards a staged entity by its staged key; the committed state is untouched.</summary>
+    public ValueTask DiscardStagedAsync(string key)
+    {
+        return _store.DiscardStagedAsync(key);
+    }
+
+    /// <summary>
     /// Returns a read-only snapshot of all entities without deep-cloning their content. The returned entities
     /// must be treated as read-only; intended for internal read-only consumers such as validation.
     /// </summary>
@@ -99,7 +121,8 @@ public abstract class GtsRegistry
 
         // Read-only snapshot avoids cloning the whole registry up front; GtsQuery.Execute deep-clones
         // only the entities that actually match (single clone per result instead of one per entity).
-        var all = await _store.SnapshotForReadAsync().ConfigureAwait(false);
+        // Committed-only: a public query must never surface a staged (not-yet-committed) entity.
+        var all = await _store.SnapshotCommittedForReadAsync().ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         var results = GtsQuery.Execute(all, parsed, lim, cancellationToken);
         return GtsQueryExecutionResult.Success(lim, results);

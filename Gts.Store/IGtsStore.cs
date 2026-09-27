@@ -41,11 +41,35 @@ public interface IGtsStore
 
     /// <summary>
     /// Returns a read-only snapshot of all stored entities <strong>without</strong> deep-cloning their content,
-    /// for internal read-only consumers (e.g. validation). The returned entities and their <see cref="GtsJsonEntity.Content"/>
+    /// for internal read-only consumers (e.g. validation). Includes the staging overlay (see
+    /// <see cref="StageAsync"/>) so a schema being validated as part of a batch can resolve its
+    /// not-yet-committed siblings. The returned entities and their <see cref="GtsJsonEntity.Content"/>
     /// must not be mutated. Prefer this over <see cref="GetAllAsync"/> on hot paths that only read.
     /// </summary>
     ValueTask<IReadOnlyList<GtsJsonEntity>> SnapshotForReadAsync();
-    
+
+    /// <summary>
+    /// Like <see cref="SnapshotForReadAsync"/> but committed-only: the staging overlay is never
+    /// included. This is the read path for public/API consumers (e.g. <c>/query</c>), so a
+    /// staged-but-not-yet-committed entity is never exposed.
+    /// </summary>
+    ValueTask<IReadOnlyList<GtsJsonEntity>> SnapshotCommittedForReadAsync();
+
+    /// <summary>
+    /// Stages an entity WITHOUT publishing it, returning its registry key. A staged entity is visible to
+    /// internal validation via <see cref="SnapshotForReadAsync"/> (so a batch resolves intra-batch references
+    /// regardless of order) but invisible to public reads (<see cref="GetAsync"/>, <see cref="GetByInstanceIdAsync"/>,
+    /// <see cref="GetAllAsync"/>, <see cref="SnapshotCommittedForReadAsync"/>) until <see cref="CommitStagedAsync"/>.
+    /// Callers MUST eventually commit or discard the staged key.
+    /// </summary>
+    ValueTask<string> StageAsync(GtsJsonEntity entity);
+
+    /// <summary>Publishes a previously staged entity (by its staged key), making it visible to public reads.</summary>
+    ValueTask CommitStagedAsync(string key);
+
+    /// <summary>Drops a staged entity (by its staged key). The committed state is untouched.</summary>
+    ValueTask DiscardStagedAsync(string key);
+
     /// <summary>Returns the number of stored entities.</summary>
     ValueTask<int> CountAsync();
 }

@@ -113,28 +113,95 @@ public static partial class GtsHttpApiExtensions
             if (node is not JsonArray schemas)
                 return Results.Json(new { ok = false, error = "Request body must be a JSON array of GTS Type Schemas" }, statusCode: 422);
 
-            var results = new List<object>();
+            var results = new object?[schemas.Count];
             var allOk = true;
-            foreach (var item in schemas)
+
+            if (!validate)
             {
-                if (item is not JsonObject schema)
+                // Without validation, forward references are allowed and order does not matter, so
+                // each entry is registered directly.
+                for (var i = 0; i < schemas.Count; i++)
                 {
+                    if (schemas[i] is not JsonObject schema)
+                    {
+                        results[i] = new { ok = false, type_id = (string?)null, error = "GTS Type Schema entry must be a JSON object" };
+                        allOk = false;
+                        continue;
+                    }
+                    if (!GtsTypeSchema.TryGetDeclaredTypeId(schema, out var typeId, out var identityError))
+                    {
+                        results[i] = new { ok = false, type_id = (string?)null, error = identityError };
+                        allOk = false;
+                        continue;
+                    }
+                    var result = await GtsEntityOperations.TryAddAsync(registry, schema, false, HttpExtractOptions, refValidationMode).ConfigureAwait(false);
+                    results[i] = new { ok = result.Ok, type_id = (string?)typeId, error = result.Error };
+                    if (!result.Ok)
+                        allOk = false;
+                }
+                return Results.Json(new { ok = allOk, results });
+            }
+
+            // validate=true: two-phase so the outcome is order-independent and nothing invalid is ever
+            // published. Stage every structurally-valid entry (invisible to public reads), validate each
+            // against the fully-staged set (so intra-batch references/ancestors resolve regardless of
+            // order), then commit the entries that passed and discard the ones that failed.
+            var staged = new List<(int Index, string TypeId, GtsJsonEntity Entity, string Key)>();
+            for (var i = 0; i < schemas.Count; i++)
+            {
+                if (schemas[i] is not JsonObject schema)
+                {
+                    results[i] = new { ok = false, type_id = (string?)null, error = "GTS Type Schema entry must be a JSON object" };
                     allOk = false;
-                    results.Add(new { ok = false, type_id = (string?)null, error = "GTS Type Schema entry must be a JSON object" });
                     continue;
                 }
-
                 if (!GtsTypeSchema.TryGetDeclaredTypeId(schema, out var typeId, out var identityError))
                 {
+                    results[i] = new { ok = false, type_id = (string?)null, error = identityError };
                     allOk = false;
-                    results.Add(new { ok = false, type_id = (string?)null, error = identityError });
                     continue;
                 }
-
-                var result = await GtsEntityOperations.TryAddAsync(registry, schema, validate, HttpExtractOptions, refValidationMode).ConfigureAwait(false);
-                if (!result.Ok)
+                var (entity, prepError) = GtsEntityOperations.PrepareSchema(schema, HttpExtractOptions);
+                if (entity is null)
+                {
+                    results[i] = new { ok = false, type_id = (string?)typeId, error = prepError };
                     allOk = false;
-                results.Add(new { ok = result.Ok, type_id = typeId, error = result.Error });
+                    continue;
+                }
+                // Reject a conflicting re-registration against the committed store before staging.
+                var existing = entity.GtsId is not null ? await registry.GetAsync(entity.GtsId).ConfigureAwait(false) : null;
+                if (existing is not null && !JsonNode.DeepEquals(existing.Content, entity.Content))
+                {
+                    results[i] = new { ok = false, type_id = (string?)typeId, error = "Entity already exists with different content" };
+                    allOk = false;
+                    continue;
+                }
+                var key = await registry.StageAsync(entity).ConfigureAwait(false);
+                staged.Add((i, typeId, entity, key));
+            }
+
+            // Phase 2: validate each staged entry against the fully-staged set.
+            var verdicts = new List<(int Index, string TypeId, string Key, string? Error)>();
+            foreach (var (index, typeId, entity, key) in staged)
+            {
+                var error = await GtsEntityOperations.ValidateStagedSchemaAsync(registry, entity, refValidationMode).ConfigureAwait(false);
+                verdicts.Add((index, typeId, key, error));
+            }
+
+            // Phase 3: publish the entries that passed, discard the ones that failed.
+            foreach (var (index, typeId, key, error) in verdicts)
+            {
+                if (error is null)
+                {
+                    await registry.CommitStagedAsync(key).ConfigureAwait(false);
+                    results[index] = new { ok = true, type_id = (string?)typeId, error = (string?)null };
+                }
+                else
+                {
+                    await registry.DiscardStagedAsync(key).ConfigureAwait(false);
+                    results[index] = new { ok = false, type_id = (string?)typeId, error = (string?)error };
+                    allOk = false;
+                }
             }
 
             return Results.Json(new { ok = allOk, results });

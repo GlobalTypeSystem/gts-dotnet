@@ -12,6 +12,10 @@ internal sealed class InMemoryGtsStore : IGtsStore
 {
     private readonly Dictionary<GtsId, GtsJsonEntity> _entities = new();
     private readonly Dictionary<string, GtsJsonEntity> _instanceKeys = new(StringComparer.Ordinal);
+    // Staging overlay: entities registered but not yet committed. Visible to internal validation
+    // (via SnapshotForReadAsync) so a batch resolves intra-batch references regardless of order, but
+    // invisible to public reads until CommitStagedAsync. Keyed by the resolved instance key.
+    private readonly Dictionary<string, GtsJsonEntity> _staged = new(StringComparer.Ordinal);
     private readonly object _sync = new();
 
     /// <inheritdoc/>
@@ -130,6 +134,29 @@ internal sealed class InMemoryGtsStore : IGtsStore
     {
         lock (_sync)
         {
+            // Committed entities overlaid with the staging area (staged wins for the same key),
+            // so a schema being validated as part of a batch resolves its staged siblings.
+            var byKey = new Dictionary<string, GtsJsonEntity>(_instanceKeys, StringComparer.Ordinal);
+            foreach (var kv in _staged)
+                byKey[kv.Key] = kv.Value;
+
+            var seen = new HashSet<GtsJsonEntity>(ReferenceEqualityComparer.Instance);
+            var list = new List<GtsJsonEntity>();
+            foreach (var e in byKey.Values)
+            {
+                if (seen.Add(e))
+                    list.Add(e);
+            }
+
+            return ValueTask.FromResult<IReadOnlyList<GtsJsonEntity>>(list);
+        }
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<GtsJsonEntity>> SnapshotCommittedForReadAsync()
+    {
+        lock (_sync)
+        {
             var seen = new HashSet<GtsJsonEntity>(ReferenceEqualityComparer.Instance);
             var list = new List<GtsJsonEntity>();
             foreach (var e in _instanceKeys.Values)
@@ -140,6 +167,43 @@ internal sealed class InMemoryGtsStore : IGtsStore
 
             return ValueTask.FromResult<IReadOnlyList<GtsJsonEntity>>(list);
         }
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<string> StageAsync(GtsJsonEntity entity)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        var key = ResolveKey(entity);
+        var stored = entity.DeepClone();
+        lock (_sync)
+        {
+            _staged[key] = stored;
+        }
+
+        return ValueTask.FromResult(key);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask CommitStagedAsync(string key)
+    {
+        lock (_sync)
+        {
+            if (_staged.Remove(key, out var stored))
+                StoreLocked(stored, key);
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public ValueTask DiscardStagedAsync(string key)
+    {
+        lock (_sync)
+        {
+            _staged.Remove(key);
+        }
+
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>

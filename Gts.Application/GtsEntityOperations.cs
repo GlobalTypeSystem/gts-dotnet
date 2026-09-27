@@ -122,4 +122,68 @@ public static class GtsEntityOperations
             return new AddResult(false, idOut, entity.SchemaId, entity.IsSchema, "Entity already exists with different content", true);
         return new AddResult(true, idOut, string.IsNullOrEmpty(entity.SchemaId) ? null : entity.SchemaId, entity.IsSchema, null);
     }
+
+    /// <summary>
+    /// Runs the structural checks for a batch Type Schema entry (canonical $schema/$id, dialect, GTS
+    /// keyword placement, $ref format and x-gts-ref patterns) and builds the entity WITHOUT touching the
+    /// store. Returns the entity on success or an error message. Mirrors the schema branch of
+    /// <see cref="TryAddAsync"/> so a batch entry is checked exactly like a single POST /entities schema.
+    /// </summary>
+    public static (GtsJsonEntity? Entity, string? Error) PrepareSchema(JsonObject body, GtsExtractOptions? extractOptions = null)
+    {
+        var opt = extractOptions ?? GtsExtractOptions.Default;
+        var entity = GtsJsonEntity.ExtractEntity(body, opt);
+        if (!entity.IsSchema || entity.GtsId is null)
+            return (null, "Unable to detect GTS ID in schema");
+
+        var rawId = body.TryGetPropertyValue("$id", out var idn) && idn is JsonValue idValue && idValue.TryGetValue<string>(out var id)
+            ? id
+            : null;
+        if (!string.IsNullOrEmpty(rawId) && rawId.StartsWith(GtsConstants.IdPrefix, StringComparison.Ordinal) &&
+            !rawId.StartsWith(GtsConstants.UriPrefix, StringComparison.Ordinal))
+            return (null, "Schema $id must use gts:// URI format, not plain gts. prefix");
+        if (!GtsTypeSchema.TryGetSupportedDialect(body, out _, out var dialectError))
+            return (null, dialectError);
+        var keywordErrors = GtsSchemaKeywordValidator.Validate(body);
+        if (keywordErrors.Count > 0)
+            return (null, string.Join("; ", keywordErrors));
+        var refErrors = GtsRefValidator.ValidatePatterns(body, entity.GtsId.Id);
+        if (refErrors.Count > 0)
+            return (null, "x-gts-ref validation failed: " + string.Join("; ", refErrors));
+        try
+        {
+            GtsSchemaRefFormatValidator.ValidateRefs(body);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message);
+        }
+        return (entity, null);
+    }
+
+    /// <summary>
+    /// Runs the semantic validation of a staged schema (x-gts-ref existence, derivation/traits) against the
+    /// current staged+committed set, returning an error message on failure or null on success. Does not
+    /// mutate the store: the caller commits the staged entry on success or discards it on failure.
+    /// </summary>
+    public static async Task<string?> ValidateStagedSchemaAsync(
+        GtsRegistry registry,
+        GtsJsonEntity entity,
+        GtsRefValidationMode refValidationMode,
+        CancellationToken cancellationToken = default)
+    {
+        if (entity.GtsId is null)
+            return "Unable to detect GTS ID in schema";
+        var registered = await registry.SnapshotForReadAsync().ConfigureAwait(false);
+        var constraintErrors = GtsRefValidator.ValidateConstraints(entity.Content, entity.GtsId.Id, registered, refValidationMode);
+        if (constraintErrors.Count > 0)
+            return "x-gts-ref validation failed: " + string.Join("; ", constraintErrors);
+        var schemaVr = await registry.ValidateSchemaAsync(entity.GtsId, entity.Content, cancellationToken, refValidationMode)
+            .ConfigureAwait(false);
+        if (!schemaVr.Ok)
+            return schemaVr.Errors is { Count: > 0 }
+                ? string.Join("; ", schemaVr.Errors)
+                : (schemaVr.FailureReason?.ToWire() ?? "Schema validation failed");
+        return null;
+    }
 }
