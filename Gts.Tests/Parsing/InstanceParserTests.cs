@@ -17,7 +17,7 @@ public class InstanceParserTests
         var segments = id.ToArray();
         Assert.Equal(2, segments.Length);
     }
-    
+
     [Fact]
     public void InstanceParsesTripleSegment()
     {

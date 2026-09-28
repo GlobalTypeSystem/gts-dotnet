@@ -147,20 +147,20 @@ public static class GtsRegistryBootstrap
                         {
                             var clone = (JsonObject)jo.DeepClone()!;
                             GtsJsonKeyNormalizer.Apply(clone);
-                            await GtsEntityOperations.TryAddAsync(registry, clone, validate: false, opt, cancellationToken)
+                            await GtsEntityOperations.TryAddAsync(registry, clone, validate: false, opt, cancellationToken: cancellationToken)
                                 .ConfigureAwait(false);
                         }
                     }
 
                     break;
                 case JsonObject obj:
-                {
-                    var clone = (JsonObject)obj.DeepClone()!;
-                    GtsJsonKeyNormalizer.Apply(clone);
-                    await GtsEntityOperations.TryAddAsync(registry, clone, validate: false, opt, cancellationToken)
-                        .ConfigureAwait(false);
-                    break;
-                }
+                    {
+                        var clone = (JsonObject)obj.DeepClone()!;
+                        GtsJsonKeyNormalizer.Apply(clone);
+                        await GtsEntityOperations.TryAddAsync(registry, clone, validate: false, opt, cancellationToken: cancellationToken)
+                            .ConfigureAwait(false);
+                        break;
+                    }
             }
         }
     }

@@ -20,7 +20,7 @@ public sealed class GtsInstanceCastResult
     public GtsId? ToSchemaId { get; init; }
 
     /// <summary>High-level failure code when <see cref="Ok"/> is false; null on success.</summary>
-    public string? FailureReason { get; init; }
+    public GtsValidationFailure? FailureReason { get; init; }
 
     /// <summary>Deep-cloned instance updated toward the target effective schema; null when <see cref="Ok"/> is false.</summary>
     public JsonObject? CastedContent { get; init; }

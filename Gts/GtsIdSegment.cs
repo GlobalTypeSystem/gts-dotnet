@@ -34,30 +34,30 @@ public sealed class GtsIdSegment
     internal GtsIdSegment()
     {
     }
-    
+
     //public string? Segment { get; internal set; }
-    
+
     /// <summary>Vendor part of the segment.</summary>
     public string? Vendor { get; internal set; }
-    
+
     /// <summary>Package part of the segment.</summary>
     public string? Package { get; internal set; }
-    
+
     /// <summary>Namespace part of the segment.</summary>
     public string? Namespace { get; internal set; }
-    
+
     /// <summary>Type part of the segment.</summary>
     public string? Type { get; internal set; }
-    
+
     /// <summary>Major version component, or null if wildcard.</summary>
     public int? VersionMajor { get; internal set; }
-    
+
     /// <summary>Minor version component, or null if not specified.</summary>
     public int? VersionMinor { get; internal set; }
-    
+
     /// <summary>True if this segment is from a type ID (trailing ~).</summary>
     public bool IsType { get; internal set; }
-    
+
     /// <summary>True if this segment is a pattern wildcard.</summary>
     public bool IsWildcard { get; internal set; }
 
@@ -100,7 +100,7 @@ public sealed class GtsIdSegment
         {
             sb.Append('v');
             sb.Append(VersionMajor.Value);
-            
+
             if (VersionMinor.HasValue)
             {
                 sb.Append('.');

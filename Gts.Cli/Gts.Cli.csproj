@@ -2,9 +2,6 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Gts.Cli</RootNamespace>
     <!-- Assembly name is Gts.Cli (not `gts`): naming it `gts` produces a
          `gts.dll` that collides case-insensitively with the `Gts` library's

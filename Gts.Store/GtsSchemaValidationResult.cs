@@ -12,7 +12,7 @@ public sealed class GtsSchemaValidationResult
     public string? SchemaId { get; init; }
 
     /// <summary>High-level failure code when <see cref="Ok"/> is false; null on success.</summary>
-    public string? FailureReason { get; init; }
+    public GtsValidationFailure? FailureReason { get; init; }
 
     /// <summary>
     /// Detailed messages: JSON Schema evolution violations vs a precedent, or a single ref-format error.

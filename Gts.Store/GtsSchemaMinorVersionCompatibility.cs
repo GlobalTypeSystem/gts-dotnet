@@ -95,8 +95,7 @@ public static class GtsSchemaMinorVersionCompatibility
 
         var oldFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(olderSchema);
         var newFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(newerSchema);
-        var (backOk, backErr) = GtsJsonSchemaEvolutionCompatibility.CheckBackward(oldFlat, newFlat);
-        var (fwdOk, fwdErr) = GtsJsonSchemaEvolutionCompatibility.CheckForward(oldFlat, newFlat);
+        var (backOk, backErr, fwdOk, fwdErr) = GtsSchemaCompatibilityService.CompareEvolution(oldFlat, newFlat);
 
         return new GtsMinorVersionPairComparison
         {

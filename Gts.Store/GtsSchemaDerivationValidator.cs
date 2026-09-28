@@ -17,6 +17,11 @@ public static class GtsSchemaDerivationValidator
 
         while (true)
         {
+            var dialect = GtsSchemaDependencyGraph.Dialect(currentSchema);
+            GtsSchemaDependencyGraph.ValidateDialects(currentSchema, dialect, tryLoadTypeSchema, errors);
+            ValidateReferenceTargets(currentSchema, dialect, tryLoadTypeSchema, errors, new HashSet<string>());
+            if (GetParentTypeId(currentId) is not null && GtsSchemaDependencyGraph.HasCycle(currentId, currentSchema, tryLoadTypeSchema))
+                errors.Add($"Schema '{currentId}' contains a cyclic GTS $ref dependency");
             var parentIdStr = GetParentTypeId(currentId);
             if (parentIdStr is null)
                 break;
@@ -30,19 +35,63 @@ public static class GtsSchemaDerivationValidator
             var parentSchema = tryLoadTypeSchema(parentId);
             if (parentSchema is null)
             {
-                errors.Add($"Precedent schema '{parentIdStr}' not found.");
+                errors.Add($"Parent GTS Type Schema not found: Precedent schema '{parentIdStr}'.");
                 break;
             }
 
-            var resolvedParent = ResolveRefs(parentSchema, tryLoadTypeSchema, new HashSet<string>());
-            var resolvedChild = ResolveRefs(currentSchema, tryLoadTypeSchema, new HashSet<string>());
-            ValidateSubset(Flatten(resolvedParent), Flatten(resolvedChild), "", errors);
+            if (parentSchema[GtsSchemaKeywords.Final] is JsonValue finalValue && finalValue.TryGetValue<bool>(out var isFinal) && isFinal)
+                errors.Add($"Precedent schema '{parentIdStr}' is final and cannot be derived");
+            if (GtsSchemaDependencyGraph.Dialect(parentSchema) != GtsSchemaDependencyGraph.Dialect(currentSchema))
+                errors.Add($"Schema '{currentId}' uses a different JSON Schema dialect from precedent '{parentIdStr}'");
+            var resolvedParent = GtsSchemaDependencyGraph.Resolve(parentSchema, tryLoadTypeSchema);
+            var resolvedChild = GtsSchemaDependencyGraph.Resolve(currentSchema, tryLoadTypeSchema);
+            var parentFlat = Flatten(resolvedParent);
+            ValidateSubset(parentFlat, Flatten(resolvedChild), "", errors);
+            ValidateRedeclarations(parentFlat, Flatten(currentSchema), "", errors);
+            ValidateClosedBranches(parentFlat, currentSchema, "", errors);
 
             currentId = parentIdStr;
             currentSchema = parentSchema;
         }
 
         return (errors.Count == 0, errors);
+    }
+
+    internal static JsonObject ResolveForEvaluation(JsonObject schema, Func<GtsId, JsonObject?> loadSchema) =>
+        GtsSchemaDependencyGraph.Resolve(schema, loadSchema);
+
+    internal static IReadOnlyList<string> ValidateCompatibilityCore(JsonObject parent, JsonObject child)
+    {
+        var errors = new List<string>();
+        var parentFlat = Flatten(parent);
+        ValidateSubset(parentFlat, Flatten(child), "", errors);
+        ValidateRedeclarations(parentFlat, Flatten(child), "", errors);
+        ValidateClosedBranches(parentFlat, child, "", errors);
+        return errors;
+    }
+
+    internal static IReadOnlyList<string> ValidateOverlayCore(JsonObject parent, JsonObject overlay)
+    {
+        var errors = new List<string>();
+        var parentFlat = Flatten(parent);
+        var overlayFlat = Flatten(overlay);
+        if (overlayFlat["properties"] is JsonObject overlayPropertyMap)
+        {
+            foreach (var name in overlayPropertyMap.Select(property => property.Key).ToList())
+            {
+                if (overlayPropertyMap[name] is JsonObject property && property.All(entry => entry.Key is "default" or "title" or "description" or "examples"))
+                    overlayPropertyMap.Remove(name);
+            }
+        }
+        ValidateRedeclarations(parentFlat, overlayFlat, "", errors);
+        ValidateClosedBranches(parentFlat, overlay, "", errors);
+        if (IsFalse(parentFlat["additionalProperties"]) && overlay["properties"] is JsonObject overlayProperties &&
+            parentFlat["properties"] is JsonObject parentProperties)
+        {
+            foreach (var added in overlayProperties.Select(property => property.Key).Except(parentProperties.Select(property => property.Key)))
+                errors.Add($"{added}: descendant trait schema adds a field to a closed ancestor");
+        }
+        return errors;
     }
 
     /// <summary>Strips the last <c>~segment</c> from a chained type id, or returns null for a single-segment base.</summary>
@@ -59,36 +108,49 @@ public static class GtsSchemaDerivationValidator
         return withoutTrailing[..(last + 1)].ToString();
     }
 
-    private static JsonObject ResolveRefs(JsonObject schema, Func<GtsId, JsonObject?> load, HashSet<string> stack)
+    private static void ValidateReferenceTargets(
+        JsonObject schema,
+        string rootDialect,
+        Func<GtsId, JsonObject?> load,
+        List<string> errors,
+        HashSet<string> visited)
     {
-        if (schema["$ref"] is JsonValue refValue && refValue.TryGetValue<string>(out var reference) &&
-            reference.StartsWith("gts://", StringComparison.Ordinal))
+        foreach (var reference in GtsSchemaDependencyGraph.References(schema))
         {
-            var id = reference[6..];
-            if (GtsId.TryParse(id, out var parsed) && parsed is not null && stack.Add(id))
+            if (!visited.Add(reference))
+                continue;
+            if (!GtsId.TryParse(reference, out var parsed) || parsed is null || load(parsed) is not JsonObject target)
             {
-                var target = load(parsed);
-                if (target is not null)
+                errors.Add($"Referenced GTS Type Schema '{reference}' not found");
+                continue;
+            }
+            if (GtsSchemaDependencyGraph.Dialect(target) != rootDialect)
+                errors.Add($"Referenced GTS Type Schema '{reference}' uses a different JSON Schema dialect");
+            var keywordErrors = GtsSchemaKeywordValidator.Validate(target);
+            errors.AddRange(keywordErrors.Select(error => $"Referenced GTS Type Schema '{reference}' is invalid: {error}"));
+            if (parsed is not null)
+            {
+                var traitErrors = GtsSchemaTraitsValidator.Validate(parsed, target, load, Array.Empty<Gts.Extraction.GtsJsonEntity>(), GtsRefValidationMode.None);
+                errors.AddRange(traitErrors.Select(error => $"Referenced GTS Type Schema '{reference}' is invalid: {error}"));
+                var ancestorId = GetParentTypeId(reference);
+                while (ancestorId is not null && GtsId.TryParse(ancestorId, out var ancestorParsed) && ancestorParsed is not null && load(ancestorParsed) is JsonObject ancestor)
                 {
-                    var resolved = ResolveRefs(target, load, stack);
-                    stack.Remove(id);
-                    return resolved;
+                    var ancestorTraitErrors = GtsSchemaTraitsValidator.Validate(ancestorParsed, ancestor, load, Array.Empty<Gts.Extraction.GtsJsonEntity>(), GtsRefValidationMode.None);
+                    errors.AddRange(ancestorTraitErrors.Select(error => $"Referenced GTS Type Schema ancestor '{ancestorId}' is invalid: {error}"));
+                    ancestorId = GetParentTypeId(ancestorId);
                 }
             }
+            if (GetParentTypeId(reference) is { } parentId && GtsId.TryParse(parentId, out var parentParsed) &&
+                parentParsed is not null && load(parentParsed) is JsonObject parentSchema)
+            {
+                var compatibilityErrors = GtsSchemaCompatibilityService.ValidateDerivation(
+                    GtsSchemaDependencyGraph.Resolve(parentSchema, load),
+                    GtsSchemaDependencyGraph.Resolve(target, load));
+                errors.AddRange(compatibilityErrors.Select(error => $"Referenced GTS Type Schema '{reference}' has an invalid ancestor chain: {error}"));
+            }
+            ValidateReferenceTargets(target, rootDialect, load, errors, visited);
         }
-
-        var clone = new JsonObject();
-        foreach (var (key, value) in schema)
-            clone[key] = ResolveNode(value, load, stack);
-        return clone;
     }
-
-    private static JsonNode? ResolveNode(JsonNode? node, Func<GtsId, JsonObject?> load, HashSet<string> stack) => node switch
-    {
-        JsonObject obj => ResolveRefs(obj, load, stack),
-        JsonArray array => new JsonArray(array.Select(item => ResolveNode(item, load, stack)).ToArray()),
-        _ => node?.DeepClone()
-    };
 
     private static JsonObject Flatten(JsonObject schema)
     {
@@ -131,6 +193,15 @@ public static class GtsSchemaDerivationValidator
             target["properties"] = targetProperties;
             return;
         }
+        if (key == "additionalProperties")
+        {
+            if (IsFalse(target[key]))
+                return;
+            if (value is JsonValue candidate && candidate.TryGetValue<bool>(out var candidateAllowed) && candidateAllowed && target.ContainsKey(key))
+                return;
+            target[key] = value?.DeepClone();
+            return;
+        }
         if (key == "required" && value is JsonArray required)
         {
             var targetRequired = target["required"] as JsonArray ?? new JsonArray();
@@ -156,7 +227,11 @@ public static class GtsSchemaDerivationValidator
             return;
         }
         if (child is JsonValue childFalse && childFalse.TryGetValue<bool>(out var allowed) && !allowed)
+        {
+            if (parent is not JsonValue parentFalse || !parentFalse.TryGetValue<bool>(out var parentFalseAllowed) || parentFalseAllowed)
+                errors.Add($"{path}: derived schema disables a property defined by the base");
             return;
+        }
         if (parent is not JsonObject parentObject || child is not JsonObject childObject)
             return;
 
@@ -188,8 +263,17 @@ public static class GtsSchemaDerivationValidator
             }
         }
 
-        if (IsFalse(parentObject["additionalProperties"]) && !IsFalse(childObject["additionalProperties"]))
-            errors.Add($"{path}: derived schema reopens a closed object");
+        if (IsFalse(parentObject["additionalProperties"]))
+        {
+            if (!IsFalse(childObject["additionalProperties"]))
+                errors.Add($"{path}: derived schema reopens a closed object");
+            if (childProperties is not null)
+            {
+                var parentNames = parentProperties?.Select(property => property.Key).ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>();
+                foreach (var added in childProperties.Select(property => property.Key).Where(name => !parentNames.Contains(name)))
+                    errors.Add($"{Join(path, added)}: derived schema adds a property forbidden by a closed base");
+            }
+        }
 
         if (parentObject["items"] is JsonNode parentItems)
         {
@@ -197,6 +281,73 @@ public static class GtsSchemaDerivationValidator
                 errors.Add($"{path}: derived schema drops items constraint");
             else
                 ValidateSubset(parentItems, childItems, path + "[]", errors);
+        }
+    }
+
+    private static void ValidateRedeclarations(JsonObject parent, JsonObject declared, string path, List<string> errors)
+    {
+        if (parent["properties"] is not JsonObject parentProperties || declared["properties"] is not JsonObject declaredProperties)
+            return;
+        foreach (var (name, childProperty) in declaredProperties)
+        {
+            if (parentProperties.TryGetPropertyValue(name, out var parentProperty))
+            {
+                if (parentProperty is JsonObject parentObject && childProperty is JsonObject childObject)
+                {
+                    var composed = (JsonObject)childObject.DeepClone();
+                    if (parentObject["properties"] is JsonObject inheritedProperties)
+                    {
+                        var composedProperties = composed["properties"] as JsonObject ?? new JsonObject();
+                        foreach (var (propertyName, propertySchema) in inheritedProperties)
+                        {
+                            if (!composedProperties.ContainsKey(propertyName))
+                                composedProperties[propertyName] = propertySchema?.DeepClone();
+                        }
+                        composed["properties"] = composedProperties;
+                    }
+                    if (parentObject["required"] is JsonArray inheritedRequired)
+                    {
+                        var composedRequired = composed["required"] as JsonArray ?? new JsonArray();
+                        var names = composedRequired.Select(item => item?.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
+                        foreach (var requiredName in inheritedRequired.OfType<JsonValue>().Select(item => item.GetValue<string>()))
+                        {
+                            if (names.Add(requiredName))
+                                composedRequired.Add(requiredName);
+                        }
+                        composed["required"] = composedRequired;
+                    }
+                    if (!composed.ContainsKey("additionalProperties") && parentObject["additionalProperties"] is JsonNode inheritedAdditional)
+                        composed["additionalProperties"] = inheritedAdditional.DeepClone();
+                    ValidateSubset(parentProperty, composed, Join(path, name), errors);
+                }
+                else
+                    ValidateSubset(parentProperty, childProperty, Join(path, name), errors);
+            }
+        }
+    }
+
+    private static void ValidateClosedBranches(JsonObject ancestor, JsonObject descendant, string path, List<string> errors)
+    {
+        if (descendant["allOf"] is JsonArray allOf)
+        {
+            foreach (var branch in allOf.OfType<JsonObject>())
+                ValidateClosedBranches(ancestor, branch, path, errors);
+        }
+        if (IsFalse(descendant["additionalProperties"]) && ancestor["properties"] is JsonObject ancestorProperties)
+        {
+            var descendantProperties = descendant["properties"] as JsonObject;
+            foreach (var name in ancestorProperties.Select(property => property.Key))
+            {
+                if (descendantProperties is null || !descendantProperties.ContainsKey(name))
+                    errors.Add($"{Join(path, name)}: closed descendant branch does not restate an ancestor property");
+            }
+        }
+        if (ancestor["properties"] is not JsonObject parentProperties || descendant["properties"] is not JsonObject childProperties)
+            return;
+        foreach (var (name, childProperty) in childProperties)
+        {
+            if (parentProperties[name] is JsonObject parentProperty && childProperty is JsonObject childObject)
+                ValidateClosedBranches(Flatten(parentProperty), childObject, Join(path, name), errors);
         }
     }
 
@@ -208,6 +359,8 @@ public static class GtsSchemaDerivationValidator
             return;
         if (childTypes.Count == 0)
         {
+            if (FiniteValuesMatchTypes(child, parentTypes))
+                return;
             errors.Add($"{path}: derived schema drops type constraint");
             return;
         }
@@ -238,6 +391,15 @@ public static class GtsSchemaDerivationValidator
                     errors.Add($"{path}: derived enum adds a value rejected by base");
             }
         }
+        if (child["const"] is JsonNode childValue)
+        {
+            var number = Number(childValue);
+            if (number is not null && (Number(parent["minimum"]) is decimal minimum && number < minimum ||
+                                       Number(parent["maximum"]) is decimal maximum && number > maximum))
+                errors.Add($"{path}: derived const violates a base numeric bound");
+            if (parent["enum"] is JsonArray allowedValues && !allowedValues.Any(value => JsonNode.DeepEquals(value, childValue)))
+                errors.Add($"{path}: derived const is not allowed by base enum");
+        }
     }
 
     private static void ValidateBounds(JsonObject parent, JsonObject child, string path, List<string> errors)
@@ -254,8 +416,59 @@ public static class GtsSchemaDerivationValidator
         if (parentValue is null)
             return;
         var childValue = Number(child[keyword]);
+        if (childValue is null && ConstraintProvenByFiniteValues(child, keyword, parentValue.Value, minimum))
+            return;
         if (childValue is null || minimum && childValue < parentValue || !minimum && childValue > parentValue)
             errors.Add($"{path}: derived schema loosens {keyword}");
+    }
+
+    private static bool FiniteValuesMatchTypes(JsonObject schema, HashSet<string> types)
+    {
+        IEnumerable<JsonNode?> values = schema["enum"] is JsonArray array
+            ? array
+            : schema["const"] is JsonNode constant ? new[] { constant } : Array.Empty<JsonNode?>();
+        var found = false;
+        foreach (var value in values)
+        {
+            found = true;
+            var matches = value switch
+            {
+                JsonValue json when json.TryGetValue<string>(out _) => types.Contains("string"),
+                JsonValue json when json.TryGetValue<bool>(out _) => types.Contains("boolean"),
+                JsonValue json when json.TryGetValue<long>(out _) => types.Contains("integer") || types.Contains("number"),
+                JsonValue json when json.TryGetValue<double>(out _) => types.Contains("number"),
+                JsonObject => types.Contains("object"),
+                JsonArray => types.Contains("array"),
+                null => types.Contains("null"),
+                _ => false
+            };
+            if (!matches)
+                return false;
+        }
+        return found;
+    }
+
+    private static bool ConstraintProvenByFiniteValues(JsonObject child, string keyword, decimal bound, bool minimum)
+    {
+        IEnumerable<JsonNode?> values = child["enum"] is JsonArray array
+            ? array
+            : child["const"] is JsonNode constant
+                ? new[] { constant }
+                : Array.Empty<JsonNode?>();
+        var found = false;
+        foreach (var value in values)
+        {
+            found = true;
+            decimal? measured = keyword switch
+            {
+                "minLength" or "maxLength" when value is JsonValue stringValue && stringValue.TryGetValue<string>(out var text) => text.Length,
+                "minItems" or "maxItems" when value is JsonArray itemArray => itemArray.Count,
+                _ => Number(value)
+            };
+            if (measured is null || minimum && measured < bound || !minimum && measured > bound)
+                return false;
+        }
+        return found;
     }
 
     private static HashSet<string> Types(JsonNode? node)

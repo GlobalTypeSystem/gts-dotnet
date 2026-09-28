@@ -428,7 +428,7 @@ Examples:
 
         var reg = await CreateRegistryAsync().ConfigureAwait(false);
         var r = await reg.ValidateInstanceAsync(instanceId).ConfigureAwait(false);
-        WriteJson(new { id = instanceId, ok = r.Ok, error = r.Ok ? "" : (r.FailureReason ?? "validation failed") });
+        WriteJson(new { id = instanceId, ok = r.Ok, error = r.Ok ? "" : (r.FailureReason?.ToWire() ?? "validation failed") });
         return 0;
     }
 
@@ -492,8 +492,7 @@ Examples:
 
         var oldFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(a.Content);
         var newFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(b.Content);
-        var (backOk, backErr) = GtsJsonSchemaEvolutionCompatibility.CheckBackward(oldFlat, newFlat);
-        var (fwdOk, fwdErr) = GtsJsonSchemaEvolutionCompatibility.CheckForward(oldFlat, newFlat);
+        var (backOk, backErr, fwdOk, fwdErr) = GtsSchemaCompatibilityService.CompareEvolution(oldFlat, newFlat);
 
         WriteJson(new
         {
@@ -530,12 +529,12 @@ Examples:
         {
             WriteJson(new
             {
-                error = result.FailureReason,
+                error = result.FailureReason?.ToWire(),
                 instance_id = result.InstanceId,
                 from_schema_id = result.FromSchemaId?.Id,
                 to_schema_id = result.ToSchemaId?.Id,
                 schema_validation_errors = result.SchemaValidationErrors,
-                casted_entity = result.CastedContent is null ? null : JsonNode.Parse(result.CastedContent.ToJsonString()),
+                casted_entity = result.CastedContent?.DeepClone(),
                 comparison = result.Comparison is null
                     ? null
                     : new
@@ -551,7 +550,7 @@ Examples:
 
         WriteJson(new
         {
-            casted_entity = JsonNode.Parse(result.CastedContent!.ToJsonString()),
+            casted_entity = result.CastedContent!.DeepClone(),
             is_backward_compatible = result.Comparison!.IsBackwardEvolutionCompatible,
             is_forward_compatible = result.Comparison.IsForwardEvolutionCompatible,
             is_structurally_compatible = result.Comparison.IsStructurallyCompatible
@@ -604,7 +603,7 @@ Examples:
             JsonValue jv when jv.TryGetValue<decimal>(out var nm) => nm,
             JsonValue jv when jv.TryGetValue<long>(out var nl) => nl,
             null => null!,
-            _ => JsonNode.Parse(r.Value!.ToJsonString())!
+            _ => r.Value!.DeepClone()
         };
         WriteJson(new { resolved = true, value = payload });
         return 0;

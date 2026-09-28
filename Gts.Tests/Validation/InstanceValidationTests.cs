@@ -155,7 +155,7 @@ public class InstanceValidationTests
             "gts.x.test6.events.type.v1~x.test6.invalid.event.v1.0~x.y._.some_event2.v1.0");
 
         Assert.False(result.Ok);
-        Assert.Equal("SchemaValidationFailed", result.FailureReason);
+        Assert.Equal(GtsValidationFailure.SchemaValidationFailed, result.FailureReason);
         Assert.NotNull(result.SchemaErrors);
         Assert.NotEmpty(result.SchemaErrors!);
     }
@@ -166,7 +166,7 @@ public class InstanceValidationTests
         var registry = GtsRegistry.InMemory(new GtsRegistryConfig(false));
         var result = await registry.ValidateInstanceAsync("gts.x.nonexistent.pkg.ns.type.v1.0");
         Assert.False(result.Ok);
-        Assert.Equal("InstanceNotFound", result.FailureReason);
+        Assert.Equal(GtsValidationFailure.InstanceNotFound, result.FailureReason);
     }
 
     [Fact]
@@ -302,6 +302,65 @@ public class InstanceValidationTests
         var result = await registry.ValidateInstanceAsync("8b2e3f45-6789-4abc-8123-bcdef1234567");
 
         Assert.False(result.Ok);
-        Assert.Equal("SchemaValidationFailed", result.FailureReason);
+        Assert.Equal(GtsValidationFailure.SchemaValidationFailed, result.FailureReason);
+    }
+
+    [Fact]
+    public async Task Catastrophic_pattern_is_bounded_and_does_not_hang()
+    {
+        // An untrusted schema `pattern` that is a classic catastrophic-
+        // backtracking regex, matched against an adversarial instance value,
+        // must not hang: JsonSchema.Net bounds regex match time, and the
+        // timeout is surfaced as a validation failure ("regular expression
+        // match timed out") rather than propagating - the same class of
+        // protection gts-go and gts-python get from a match timeout.
+        const string baseSchema = """
+            {
+              "$$id": "gts://gts.x.redos.events.type.v1~",
+              "$$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "required": ["id", "type", "code"],
+              "properties": {
+                "type": { "type": "string" },
+                "id": { "type": "string" },
+                "code": { "type": "string", "pattern": "(a+)+$" }
+              },
+              "additionalProperties": true
+            }
+            """;
+
+        const string derivedSchema = """
+            {
+              "$$id": "gts://gts.x.redos.events.type.v1~x.redos.evt.item.v1.0~",
+              "$$schema": "http://json-schema.org/draft-07/schema#",
+              "allOf": [
+                { "$$ref": "gts://gts.x.redos.events.type.v1~" },
+                { "type": "object", "properties": { "type": { "const": "gts.x.redos.events.type.v1~x.redos.evt.item.v1.0~" } } }
+              ]
+            }
+            """;
+
+        var adversarial = new string('a', 40_000) + "!";
+        var instance = $$"""
+            {
+              "type": "gts.x.redos.events.type.v1~x.redos.evt.item.v1.0~",
+              "id": "gts.x.redos.events.type.v1~x.redos.evt.item.v1.0~x.y._.evt.v1.0",
+              "code": "{{adversarial}}"
+            }
+            """;
+
+        var registry = await RegistryWithSchemasAndInstanceAsync(baseSchema, derivedSchema, instance);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await registry.ValidateInstanceAsync(
+            "gts.x.redos.events.type.v1~x.redos.evt.item.v1.0~x.y._.evt.v1.0");
+        stopwatch.Stop();
+
+        // The point is that validation *returns* (bounded), rather than pinning
+        // a CPU forever. The adversarial value fails the pattern, so Ok is false.
+        Assert.False(result.Ok);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(60),
+            $"validation took {stopwatch.Elapsed}, expected a bounded match time");
     }
 }

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Gts.Parsing;
 using Gts.Utils;
@@ -13,38 +14,38 @@ public sealed class GtsId
 {
     /// <summary>Maximum allowed length of a GTS identifier string.</summary>
     public const int MaxLength = 1024;
-    
+
     /// <summary>
     /// The canonical identifier string (lowercase, trimmed).
     /// </summary>
     public string Id { get; }
-    
+
     /// <summary>True if this ID is a type identifier (ends with ~).</summary>
     public bool IsType { get; private set; }
-    
+
     /// <summary>True if this ID is an instance identifier (does not end with ~).</summary>
     public bool IsInstance { get; private set; }
-    
+
     /// <summary>True if this ID was parsed as a pattern (may contain wildcards).</summary>
     public bool IsPattern { get; private set; }
-    
+
     /// <summary>
     /// Parsed segments (vendor.package.namespace.type.version per segment).
     /// </summary>
     public IReadOnlyCollection<GtsIdSegment> Segments { get; }
-    
+
     /// <summary>Creates a GTS ID from a canonical string and parsed segments.</summary>
     internal GtsId(string id, IReadOnlyCollection<GtsIdSegment> segments)
     {
         Id = id;
         Segments = segments;
     }
-    
+
     /// <summary>Parses a GTS type or instance ID; throws <see cref="ParseException"/> on failure.</summary>
     public static GtsId Parse(string id)
     {
         var parseResult = TryParseInternal(id, out GtsId? result);
-        
+
         if (parseResult)
         {
             return result!;
@@ -52,10 +53,10 @@ public sealed class GtsId
 
         throw new ParseException(parseResult);
     }
-    
+
     /// <summary>Attempts to parse a GTS type or instance ID without throwing.</summary>
     public static ParseResult TryParse(string? id, out GtsId? result)
-    {   
+    {
         return TryParseInternal(id, out result);
     }
 
@@ -63,7 +64,7 @@ public sealed class GtsId
     public static GtsId ParsePattern(string pattern)
     {
         var parseResult = TryParsePatternInternal(pattern, out GtsId? result);
-        
+
         if (parseResult)
         {
             return result!;
@@ -83,45 +84,13 @@ public sealed class GtsId
         result = null;
         if (id is null)
             return ParseResult.ArgumentIsNull;
-
-        var value = id.StartsWith("gts://", StringComparison.Ordinal) ? id[6..] : id;
-        if (value.Length == 0 || value.Length > MaxLength || value != value.ToLowerInvariant() ||
-            !value.StartsWith("gts.", StringComparison.Ordinal))
+        if (!GtsIdParser.TryParse(id, MaxLength, out var parsed) || parsed is null)
             return new ParseResult();
 
-        var isType = value.EndsWith('~');
-        var body = value[4..];
-        var parts = body.Split('~');
-        if (isType)
-            parts = parts[..^1];
-        if (parts.Length == 0 || parts.Any(string.IsNullOrEmpty))
-            return new ParseResult();
-
-        var uuidTail = !isType && parts.Length >= 2 && Guid.TryParseExact(parts[^1], "D", out _);
-        var segmentCount = uuidTail ? parts.Length - 1 : parts.Length;
-        var segments = new List<GtsIdSegment>();
-        for (var i = 0; i < segmentCount; i++)
+        result = new GtsId(parsed.CanonicalId, parsed.Segments)
         {
-            var tokens = parts[i].Split('.');
-            if (tokens.Length is not (5 or 6) || tokens.Take(4).Any(t => !Regex.IsMatch(t, "^[a-z_][a-z0-9_]*$")) ||
-                !Regex.IsMatch(tokens[4], "^v(0|[1-9][0-9]*)$") ||
-                tokens.Length == 6 && !Regex.IsMatch(tokens[5], "^(0|[1-9][0-9]*)$"))
-                return new ParseResult();
-
-            segments.Add(new GtsIdSegment(
-                tokens[0], tokens[1], tokens[2], tokens[3], int.Parse(tokens[4][1..]),
-                tokens.Length == 6 ? int.Parse(tokens[5]) : null,
-                i < segmentCount - 1 || isType || uuidTail,
-                false));
-        }
-
-        if (uuidTail)
-            segments.Add(new GtsIdSegment(null, null, null, null, null, null, false, false));
-
-        result = new GtsId(value, segments)
-        {
-            IsType = isType,
-            IsInstance = !isType,
+            IsType = parsed.IsType,
+            IsInstance = !parsed.IsType,
             IsPattern = false
         };
         return ParseResult.Success;
@@ -134,12 +103,11 @@ public sealed class GtsId
             result = null;
             return ParseResult.ArgumentIsNull;
         }
-        
+
         var parseResult = Parsers.GtsPattern.Parse(pattern);
-        
+
         if (!parseResult.Success)
         {
-            // TODO: add errors to the result
             result = null;
             return new ParseResult();
         }
@@ -161,23 +129,29 @@ public sealed class GtsId
             s.Vendor, s.Package, s.Namespace, s.Type, s.Version?.Major, s.Version?.Minor, true, s.IsWildcard);
     }
 
-    /// <summary>
-    /// Returns true if this identifier matches the given pattern.
-    /// Pattern may contain at most one trailing wildcard (*); matching is segment-by-segment.
-    /// </summary>
-    public bool Matches(GtsId pattern)
+    public static bool TryMatch(string candidate, string pattern, out bool match)
     {
-        if (pattern is null) return false;
-
-        // TODO: counting is probably not needed
-        if (!pattern.Id.Contains('*'))
-            return MatchSegments(pattern.Segments, Segments, true);
-
-        if (pattern.Id.Count(c => c == '*') > 1 || !pattern.Id.EndsWith('*'))
+        match = false;
+        if (string.IsNullOrEmpty(candidate) || string.IsNullOrEmpty(pattern))
+            return false;
+        if (candidate.Contains('*') && (candidate.Count(character => character == '*') != 1 || !candidate.EndsWith('*') || !TryParsePattern(candidate, out _)))
+            return false;
+        if (!candidate.Contains('*') && !TryParse(candidate, out _))
+            return false;
+        if (pattern.Contains('*') && (pattern.Count(character => character == '*') != 1 || !pattern.EndsWith('*') || pattern.Length < 2 || pattern[^2] is not ('.' or '~')))
+            return false;
+        if (!pattern.Contains('*') && !TryParse(pattern, out _))
             return false;
 
-        return MatchSegments(pattern.Segments, Segments, false);
+        match = PatternRegex(pattern).IsMatch(candidate);
+        return true;
     }
+
+    /// <summary>
+    /// Returns true if this identifier matches the given pattern.
+    /// Pattern may contain at most one trailing wildcard (*).
+    /// </summary>
+    public bool Matches(GtsId pattern) => pattern is not null && Matches(pattern.Id);
 
     /// <summary>
     /// Returns true if this identifier matches the given pattern string.
@@ -185,48 +159,34 @@ public sealed class GtsId
     /// </summary>
     public bool Matches(string pattern)
     {
-        if (string.IsNullOrEmpty(pattern)) return false;
-        // TODO: throwing is probably more idiomatic
-        if (!TryParsePattern(pattern, out var patternId)) return false;
-        return Matches(patternId!);
+        // A `~*` pattern matches descendants of the type, not the bare type identifier itself.
+        if (pattern.EndsWith("~*", StringComparison.Ordinal) && Id == pattern[..^1])
+            return false;
+        return TryMatch(Id, pattern, out var match) && match;
     }
 
-    private static bool MatchSegments(
-        IReadOnlyCollection<GtsIdSegment> patternSegs, IReadOnlyCollection<GtsIdSegment> candidateSegs, bool exact)
+    // Compiled-pattern cache. All GTS matching flows (Matches, TryMatch, and the CLI/HTTP match
+    // operations) resolve through a single regex translation, so behavior cannot drift between two
+    // implementations, and the (previously per-call) regex compilation is amortized across calls.
+    private static readonly ConcurrentDictionary<string, Regex> PatternRegexCache = new(StringComparer.Ordinal);
+
+    private static Regex PatternRegex(string pattern)
     {
-        if (exact && patternSegs.Count != candidateSegs.Count) return false;
-        if (patternSegs.Count > candidateSegs.Count) return false;
+        // Bound the cache: patterns can come from untrusted input, so cap growth (see GtsJsonSchemaEngine).
+        if (PatternRegexCache.Count >= 1024)
+            PatternRegexCache.Clear();
 
-        var patternList = patternSegs as IList<GtsIdSegment> ?? patternSegs.ToList();
-        var candidateList = candidateSegs as IList<GtsIdSegment> ?? candidateSegs.ToList();
-
-        for (var i = 0; i < patternList.Count; i++)
+        return PatternRegexCache.GetOrAdd(pattern, static p =>
         {
-            var pSeg = patternList[i];
-            var cSeg = candidateList[i];
-
-            if (pSeg.IsWildcard)
-            {
-                if (pSeg.Vendor is not null && pSeg.Vendor != cSeg.Vendor) return false;
-                if (pSeg.Package is not null && pSeg.Package != cSeg.Package) return false;
-                if (pSeg.Namespace is not null && pSeg.Namespace != cSeg.Namespace) return false;
-                if (pSeg.Type is not null && pSeg.Type != cSeg.Type) return false;
-                
-                if (pSeg.VersionMajor.HasValue && pSeg.VersionMajor != cSeg.VersionMajor) return false;
-                if (pSeg.VersionMinor.HasValue && (cSeg.VersionMinor is null || pSeg.VersionMinor != cSeg.VersionMinor)) return false;
-                
-                return true;
-            }
-
-            if (pSeg.Vendor != cSeg.Vendor) return false;
-            if (pSeg.Package != cSeg.Package) return false;
-            if (pSeg.Namespace != cSeg.Namespace) return false;
-            if (pSeg.Type != cSeg.Type) return false;
-            if (pSeg.VersionMajor != cSeg.VersionMajor) return false;
-            if (pSeg.VersionMinor.HasValue && (cSeg.VersionMinor is null || pSeg.VersionMinor != cSeg.VersionMinor)) return false;
-        }
-
-        return true;
+            var expression = Regex.Escape(p);
+            expression = Regex.Replace(expression, @"v([0-9]+)~", "v$1(?:\\.[0-9]+)?~");
+            expression = Regex.Replace(expression, @"v([0-9]+)$", "v$1(?:\\.[0-9]+)?");
+            var wildcard = p.EndsWith('*');
+            if (wildcard) expression = expression[..^2] + ".*";
+            return new Regex(
+                "^" + expression + (wildcard || p.EndsWith('~') ? "" : "$"),
+                RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        });
     }
 
     /// <summary>

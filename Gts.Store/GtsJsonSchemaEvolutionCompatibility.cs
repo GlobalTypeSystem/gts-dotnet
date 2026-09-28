@@ -42,6 +42,39 @@ public static class GtsJsonSchemaEvolutionCompatibility
                 errors.Add($"Removed required properties: {string.Join(", ", removedRequired)}");
         }
 
+        var oldClosed = IsClosed(oldFlat);
+        var newClosed = IsClosed(newFlat);
+        if (checkBackward)
+        {
+            if (!oldClosed)
+            {
+                foreach (var added in newProps.Keys.Except(oldProps.Keys))
+                    errors.Add($"Added property constraint '{added}'");
+            }
+            if (!oldClosed && newClosed)
+                errors.Add("New schema closes an open object");
+            if (newClosed)
+            {
+                foreach (var removed in oldProps.Keys.Except(newProps.Keys))
+                    errors.Add($"Removed property '{removed}' from a closed object");
+            }
+        }
+        else
+        {
+            if (!newClosed)
+            {
+                foreach (var removed in oldProps.Keys.Except(newProps.Keys))
+                    errors.Add($"Removed property constraint '{removed}'");
+            }
+            if (oldClosed && !newClosed)
+                errors.Add("New schema opens a closed object");
+            if (oldClosed)
+            {
+                foreach (var added in newProps.Keys.Except(oldProps.Keys))
+                    errors.Add($"Added property '{added}' to a closed object");
+            }
+        }
+
         foreach (var prop in oldProps.Keys.Intersect(newProps.Keys))
         {
             var oldPropSchema = AsObject(oldProps[prop]);
@@ -52,7 +85,9 @@ public static class GtsJsonSchemaEvolutionCompatibility
             var oldType = GetTypeString(oldPropSchema);
             var newType = GetTypeString(newPropSchema);
 
-            if (oldType is not null && newType is not null && oldType != newType)
+            if (oldType is not null && newType is not null && oldType != newType &&
+                !(checkBackward && oldType == "integer" && newType == "number") &&
+                !(!checkBackward && oldType == "number" && newType == "integer"))
                 errors.Add($"Property '{prop}' type changed from {oldType} to {newType}");
 
             var oldEnum = oldPropSchema["enum"] as JsonArray;
@@ -63,21 +98,35 @@ public static class GtsJsonSchemaEvolutionCompatibility
                 var newSet = EnumToStringSet(newEnum);
                 if (checkBackward)
                 {
-                    var added = newSet.Except(oldSet).ToHashSet();
-                    if (added.Count > 0)
-                        errors.Add($"Property '{prop}' added enum values: {string.Join(", ", added)}");
-                }
-                else
-                {
                     var removed = oldSet.Except(newSet).ToHashSet();
                     if (removed.Count > 0)
                         errors.Add($"Property '{prop}' removed enum values: {string.Join(", ", removed)}");
                 }
+                else
+                {
+                    var added = newSet.Except(oldSet).ToHashSet();
+                    if (added.Count > 0)
+                        errors.Add($"Property '{prop}' added enum values: {string.Join(", ", added)}");
+                }
             }
+            else if (checkBackward && oldEnum is null && newEnum is not null)
+                errors.Add($"Property '{prop}' added enum constraint");
+            else if (!checkBackward && oldEnum is not null && newEnum is null)
+                errors.Add($"Property '{prop}' removed enum constraint");
+
+            var oldConst = oldPropSchema["const"];
+            var newConst = newPropSchema["const"];
+            if (oldConst is not null && newConst is not null && !JsonNode.DeepEquals(oldConst, newConst))
+                errors.Add($"Property '{prop}' const changed");
+            else if (checkBackward && oldConst is null && newConst is not null)
+                errors.Add($"Property '{prop}' added const constraint");
+            else if (!checkBackward && oldConst is not null && newConst is null)
+                errors.Add($"Property '{prop}' removed const constraint");
 
             errors.AddRange(CheckConstraintCompatibility(prop, oldPropSchema, newPropSchema, checkBackward));
 
-            if (oldType == "object" && newType == "object")
+            if ((oldType == "object" && newType == "object") ||
+                oldPropSchema["properties"] is JsonObject && newPropSchema["properties"] is JsonObject)
             {
                 var (nestedOk, nestedErrs) = CheckSchemaCompatibility(oldPropSchema, newPropSchema, checkBackward);
                 if (!nestedOk)
@@ -87,7 +136,8 @@ public static class GtsJsonSchemaEvolutionCompatibility
                 }
             }
 
-            if (oldType == "array" && newType == "array")
+            if ((oldType == "array" && newType == "array") ||
+                oldPropSchema["items"] is not null && newPropSchema["items"] is not null)
             {
                 var oi = oldPropSchema["items"] as JsonObject;
                 var ni = newPropSchema["items"] as JsonObject;
@@ -95,6 +145,10 @@ public static class GtsJsonSchemaEvolutionCompatibility
                 {
                     var oit = GetTypeString(oi);
                     var nit = GetTypeString(ni);
+                    if (oit is not null && nit is not null && oit != nit &&
+                        !(checkBackward && oit == "integer" && nit == "number") &&
+                        !(!checkBackward && oit == "number" && nit == "integer"))
+                        errors.Add($"Property '{prop}' array item type changed from {oit} to {nit}");
                     if (oit == "object" && nit == "object")
                     {
                         var (nestedOk, nestedErrs) = CheckSchemaCompatibility(oi, ni, checkBackward);
@@ -108,7 +162,26 @@ public static class GtsJsonSchemaEvolutionCompatibility
             }
         }
 
+        if (oldFlat["items"] is JsonObject oldItems && newFlat["items"] is JsonObject newItems)
+        {
+            var oldItemType = GetTypeString(oldItems);
+            var newItemType = GetTypeString(newItems);
+            if (oldItemType is not null && newItemType is not null && oldItemType != newItemType)
+                errors.Add($"Array item type changed from {oldItemType} to {newItemType}");
+            errors.AddRange(CheckConstraintCompatibility("items", oldItems, newItems, checkBackward));
+        }
+
         return (errors.Count == 0, errors);
+    }
+
+    private static bool IsClosed(JsonObject schema)
+    {
+        foreach (var keyword in new[] { "additionalProperties", "unevaluatedProperties" })
+        {
+            if (schema[keyword] is JsonValue value && value.TryGetValue<bool>(out var allowed) && !allowed)
+                return true;
+        }
+        return false;
     }
 
     private static HashSet<string> EnumToStringSet(JsonArray arr)
@@ -151,7 +224,7 @@ public static class GtsJsonSchemaEvolutionCompatibility
         if (propType == "string")
             errors.AddRange(CheckMinMaxConstraint(prop, oldPropSchema, newPropSchema, "minLength", "maxLength", checkTightening));
 
-        if (propType == "array")
+        if (propType == "array" || oldPropSchema["items"] is not null || oldPropSchema["minItems"] is not null || oldPropSchema["maxItems"] is not null)
             errors.AddRange(CheckMinMaxConstraint(prop, oldPropSchema, newPropSchema, "minItems", "maxItems", checkTightening));
 
         return errors;
@@ -273,7 +346,13 @@ public static class GtsJsonSchemaEvolutionCompatibility
         }
 
         if (schema.TryGetPropertyValue("additionalProperties", out var ap))
-            result["additionalProperties"] = ap.DeepClone();
+            result["additionalProperties"] = ap?.DeepClone();
+        if (schema.TryGetPropertyValue("unevaluatedProperties", out var up))
+            result["unevaluatedProperties"] = up?.DeepClone();
+        if (schema.TryGetPropertyValue("type", out var type))
+            result["type"] = type?.DeepClone();
+        if (schema.TryGetPropertyValue("items", out var items))
+            result["items"] = items?.DeepClone();
 
         return result;
     }
@@ -295,6 +374,6 @@ public static class GtsJsonSchemaEvolutionCompatibility
         }
 
         if (flattened.TryGetPropertyValue("additionalProperties", out var ap))
-            target["additionalProperties"] = ap.DeepClone();
+            target["additionalProperties"] = ap?.DeepClone();
     }
 }
