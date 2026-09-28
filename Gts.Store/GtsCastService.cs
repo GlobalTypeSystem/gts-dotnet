@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Gts.Extraction;
 using Gts.Store.Validation;
+using Json.Schema;
 
 namespace Gts.Store;
 
@@ -55,7 +57,18 @@ internal sealed class GtsCastService(IGtsStore store)
 
         var tolerant = (JsonObject)GtsInstanceCast.RemoveGtsConstConstraints(targetDocument.DeepClone())!.AsObject();
         schemas[targetSchemaId] = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(tolerant);
-        var evaluation = GtsJsonSchemaEvaluator.Evaluate(casted, targetSchemaId, schemas);
+        EvaluationResults evaluation;
+        try
+        {
+            evaluation = GtsJsonSchemaEvaluator.Evaluate(casted, targetSchemaId, schemas);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // A schema `pattern` whose match exceeds the engine's bounded time
+            // budget fails the cast rather than propagating; see the matching
+            // guard in GtsInstanceValidationService.
+            return new GtsInstanceCastResult { Ok = false, InstanceId = id, FromSchemaId = sourceSchemaId, ToSchemaId = targetSchemaId, FailureReason = GtsValidationFailure.CastValidationFailed, Comparison = comparison, CastedContent = casted, SchemaValidationErrors = new[] { "regular expression match timed out" } };
+        }
         if (!evaluation.IsValid)
             return new GtsInstanceCastResult { Ok = false, InstanceId = id, FromSchemaId = sourceSchemaId, ToSchemaId = targetSchemaId, FailureReason = GtsValidationFailure.CastValidationFailed, Comparison = comparison, CastedContent = casted, SchemaValidationErrors = GtsJsonSchemaEvaluator.FlattenErrors(evaluation) };
         return new GtsInstanceCastResult { Ok = true, InstanceId = id, FromSchemaId = sourceSchemaId, ToSchemaId = targetSchemaId, CastedContent = casted, Comparison = comparison };

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Gts.Extraction;
 using Gts.Store.Validation;
 
@@ -73,17 +74,35 @@ internal sealed class GtsInstanceValidationService(
                 : loaded;
         }
         var effectiveSchema = GtsSchemaDependencyGraph.Resolve(schemaDocument, Load);
-        var evaluation = GtsJsonSchemaEvaluator.Evaluate(content, schemaId, schemas);
-        var referenceErrors = GtsRefValidator.ValidateInstance(content, effectiveSchema, schemaId.Id, entities, refValidationMode);
-        if (evaluation.IsValid && referenceErrors.Count == 0)
-            return new GtsInstanceValidationResult { Ok = true, Id = instanceId };
-        return new GtsInstanceValidationResult
+        try
         {
-            Ok = false,
-            Id = instanceId,
-            FailureReason = referenceErrors.Count > 0 ? GtsValidationFailure.GtsRefValidationFailed : GtsValidationFailure.SchemaValidationFailed,
-            SchemaErrors = referenceErrors.Count > 0 ? referenceErrors : GtsJsonSchemaEvaluator.FlattenErrors(evaluation)
-        };
+            var evaluation = GtsJsonSchemaEvaluator.Evaluate(content, schemaId, schemas);
+            var referenceErrors = GtsRefValidator.ValidateInstance(content, effectiveSchema, schemaId.Id, entities, refValidationMode);
+            if (evaluation.IsValid && referenceErrors.Count == 0)
+                return new GtsInstanceValidationResult { Ok = true, Id = instanceId };
+            return new GtsInstanceValidationResult
+            {
+                Ok = false,
+                Id = instanceId,
+                FailureReason = referenceErrors.Count > 0 ? GtsValidationFailure.GtsRefValidationFailed : GtsValidationFailure.SchemaValidationFailed,
+                SchemaErrors = referenceErrors.Count > 0 ? referenceErrors : GtsJsonSchemaEvaluator.FlattenErrors(evaluation)
+            };
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // An untrusted schema `pattern` whose match exceeds the engine's
+            // bounded time budget is reported as a validation failure rather
+            // than propagating a hang/exception. The JsonSchema.Net engine
+            // bounds match time; this mirrors the "regular expression match
+            // timed out" outcome the sibling runtimes surface (gts-go/gts-python).
+            return new GtsInstanceValidationResult
+            {
+                Ok = false,
+                Id = instanceId,
+                FailureReason = GtsValidationFailure.SchemaValidationFailed,
+                SchemaErrors = new[] { "regular expression match timed out" }
+            };
+        }
     }
 
     private static GtsInstanceValidationResult Failure(string? id, GtsValidationFailure? reason) => new() { Ok = false, Id = id, FailureReason = reason };

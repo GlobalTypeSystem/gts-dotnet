@@ -5,8 +5,8 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="JsonPointer.Net" Version="7.0.1" />
-      <PackageReference Include="JsonSchema.Net" Version="9.1.3" />
+      <PackageReference Include="JsonPointer.Net" Version="7.0.2" />
+      <PackageReference Include="JsonSchema.Net" Version="9.4.0" />
     </ItemGroup>
 
 </Project>
