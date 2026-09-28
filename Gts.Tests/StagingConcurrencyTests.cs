@@ -84,6 +84,85 @@ public class StagingConcurrencyTests
         Assert.Equal("keep", committed!.Content["title"]?.GetValue<string>());
     }
 
+    // Session isolation (regression for the cross-request staging leak): a snapshot taken for one staging
+    // session must overlay only that session's staged entries, never another session's unvalidated ones, and
+    // a null session must be committed-only. Without this, one batch could resolve a $ref/parent against
+    // another batch's not-yet-validated entry and commit a dangling reference.
+    [Fact]
+    public async Task Snapshot_only_overlays_its_own_staging_session()
+    {
+        var registry = GtsRegistry.InMemory(new GtsRegistryConfig(false));
+        var idA = "gts.x.dotnetsess._.a.v1~";
+        var idB = "gts.x.dotnetsess._.b.v1~";
+        const string sessionA = "session-a";
+        const string sessionB = "session-b";
+
+        await registry.StageAsync(Schema(idA, "a"), sessionA);
+        await registry.StageAsync(Schema(idB, "b"), sessionB);
+
+        static bool Has(IReadOnlyList<GtsJsonEntity> snap, string id) =>
+            snap.Any(e => string.Equals(GtsJsonEntity.ExtractId(e.Content).Id, id, StringComparison.Ordinal));
+
+        var snapA = await registry.SnapshotForReadAsync(sessionA);
+        Assert.True(Has(snapA, idA));
+        Assert.False(Has(snapA, idB)); // B's staged entry must not leak into A's validation
+
+        var snapB = await registry.SnapshotForReadAsync(sessionB);
+        Assert.True(Has(snapB, idB));
+        Assert.False(Has(snapB, idA));
+
+        var committedOnly = await registry.SnapshotForReadAsync();
+        Assert.False(Has(committedOnly, idA));
+        Assert.False(Has(committedOnly, idB));
+    }
+
+    // Atomic batch publication (regression for the non-atomic commit loop): if any target in the survivor set
+    // conflicts with committed content, the whole set is published as nothing - a dependent is never committed
+    // against a target whose content changed after validation.
+    [Fact]
+    public async Task CommitStagedBatch_publishes_nothing_when_any_target_conflicts()
+    {
+        var registry = GtsRegistry.InMemory(new GtsRegistryConfig(false));
+        var conflictId = "gts.x.dotnetatomic._.parent.v1~";
+        var dependentId = "gts.x.dotnetatomic._.child.v1~";
+        const string session = "batch-1";
+
+        // A concurrent writer already committed the parent id with different content.
+        Assert.Equal(GtsSaveOutcome.Added, await registry.TrySaveAsync(Schema(conflictId, "committed")));
+
+        var conflictToken = await registry.StageAsync(Schema(conflictId, "staged"), session);
+        var dependentToken = await registry.StageAsync(Schema(dependentId, "ok"), session);
+
+        var outcomes = await registry.CommitStagedBatchAsync(new[] { dependentToken, conflictToken });
+        Assert.Equal(GtsSaveOutcome.Conflict, outcomes[0]);
+        Assert.Equal(GtsSaveOutcome.Conflict, outcomes[1]);
+
+        // Nothing from the batch was published: the dependent is absent and the parent keeps its committed content.
+        Assert.Null(await registry.GetByInstanceIdAsync(dependentId));
+        var parent = await registry.GetByInstanceIdAsync(conflictId);
+        Assert.Equal("committed", parent!.Content["title"]?.GetValue<string>());
+    }
+
+    // The atomic batch commit publishes the entire dependency set when no target conflicts.
+    [Fact]
+    public async Task CommitStagedBatch_publishes_all_when_no_conflict()
+    {
+        var registry = GtsRegistry.InMemory(new GtsRegistryConfig(false));
+        var idA = "gts.x.dotnetatomic2._.a.v1~";
+        var idB = "gts.x.dotnetatomic2._.b.v1~";
+        const string session = "batch-2";
+
+        var tokenA = await registry.StageAsync(Schema(idA, "a"), session);
+        var tokenB = await registry.StageAsync(Schema(idB, "b"), session);
+
+        var outcomes = await registry.CommitStagedBatchAsync(new[] { tokenA, tokenB });
+        Assert.Equal(GtsSaveOutcome.Added, outcomes[0]);
+        Assert.Equal(GtsSaveOutcome.Added, outcomes[1]);
+
+        Assert.NotNull(await registry.GetByInstanceIdAsync(idA));
+        Assert.NotNull(await registry.GetByInstanceIdAsync(idB));
+    }
+
     [Fact]
     public async Task Staged_entity_is_never_visible_to_concurrent_committed_reads()
     {

@@ -18,7 +18,7 @@ internal sealed class GtsSchemaValidationService(IGtsStore store)
         return await ValidateAsync(parsed, entity.Content, cancellationToken, refValidationMode).ConfigureAwait(false);
     }
 
-    internal async ValueTask<GtsSchemaValidationResult> ValidateAsync(GtsId schemaId, JsonObject document, CancellationToken cancellationToken, GtsRefValidationMode refValidationMode)
+    internal async ValueTask<GtsSchemaValidationResult> ValidateAsync(GtsId schemaId, JsonObject document, CancellationToken cancellationToken, GtsRefValidationMode refValidationMode, string? stagingSessionId = null)
     {
         ArgumentNullException.ThrowIfNull(schemaId);
         ArgumentNullException.ThrowIfNull(document);
@@ -55,7 +55,7 @@ internal sealed class GtsSchemaValidationService(IGtsStore store)
             return new GtsSchemaValidationResult { Ok = false, SchemaId = schemaId.Id, FailureReason = GtsValidationFailure.InvalidRefFormat, Errors = new[] { exception.Message } };
         }
 
-        var entities = await store.SnapshotForReadAsync().ConfigureAwait(false);
+        var entities = await store.SnapshotForReadAsync(stagingSessionId).ConfigureAwait(false);
         var schemaById = new Dictionary<string, GtsJsonEntity>(StringComparer.Ordinal);
         foreach (var candidate in entities)
         {

@@ -170,15 +170,16 @@ public static class GtsEntityOperations
         GtsRegistry registry,
         GtsJsonEntity entity,
         GtsRefValidationMode refValidationMode,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? stagingSessionId = null)
     {
         if (entity.GtsId is null)
             return "Unable to detect GTS ID in schema";
-        var registered = await registry.SnapshotForReadAsync().ConfigureAwait(false);
+        var registered = await registry.SnapshotForReadAsync(stagingSessionId).ConfigureAwait(false);
         var constraintErrors = GtsRefValidator.ValidateConstraints(entity.Content, entity.GtsId.Id, registered, refValidationMode);
         if (constraintErrors.Count > 0)
             return "x-gts-ref validation failed: " + string.Join("; ", constraintErrors);
-        var schemaVr = await registry.ValidateSchemaAsync(entity.GtsId, entity.Content, cancellationToken, refValidationMode)
+        var schemaVr = await registry.ValidateSchemaAsync(entity.GtsId, entity.Content, cancellationToken, refValidationMode, stagingSessionId)
             .ConfigureAwait(false);
         if (!schemaVr.Ok)
             return schemaVr.Errors is { Count: > 0 }

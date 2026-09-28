@@ -143,11 +143,13 @@ public static partial class GtsHttpApiExtensions
             }
 
             // validate=true: two-phase so the outcome is order-independent and nothing invalid is ever
-            // published. Stage every structurally-valid entry (invisible to public reads), validate each
-            // against the staged set (so intra-batch references/ancestors resolve regardless of order),
-            // then commit the entries that passed and discard the ones that failed. Every staged token is
-            // tracked so a throw anywhere below still discards the leftovers in the finally block instead
-            // of leaking unvalidated entries into the internal read overlay.
+            // published. Stage every structurally-valid entry (invisible to public reads) under a single
+            // per-batch staging session, validate each against that session's staged set (so intra-batch
+            // references/ancestors resolve regardless of order, while another request's staged entries stay
+            // invisible), then publish the survivors atomically and discard the ones that failed. Every staged
+            // token is tracked so a throw anywhere below still discards the leftovers in the finally block
+            // instead of leaking unvalidated entries into the internal read overlay.
+            var stagingSession = Guid.NewGuid().ToString("N");
             var staged = new List<(int Index, string TypeId, GtsJsonEntity Entity, string Token)>();
             var pending = new HashSet<string>(StringComparer.Ordinal);
             try
@@ -181,7 +183,7 @@ public static partial class GtsHttpApiExtensions
                         allOk = false;
                         continue;
                     }
-                    var token = await registry.StageAsync(entity).ConfigureAwait(false);
+                    var token = await registry.StageAsync(entity, stagingSession).ConfigureAwait(false);
                     pending.Add(token);
                     staged.Add((i, typeId, entity, token));
                 }
@@ -197,7 +199,7 @@ public static partial class GtsHttpApiExtensions
                     var failedThisRound = new List<(int Index, string TypeId, string Token, string Error)>();
                     foreach (var (index, typeId, entity, token) in survivors)
                     {
-                        var error = await GtsEntityOperations.ValidateStagedSchemaAsync(registry, entity, refValidationMode).ConfigureAwait(false);
+                        var error = await GtsEntityOperations.ValidateStagedSchemaAsync(registry, entity, refValidationMode, default, stagingSession).ConfigureAwait(false);
                         if (error is null)
                             stillGood.Add((index, typeId, entity, token));
                         else
@@ -217,19 +219,25 @@ public static partial class GtsHttpApiExtensions
                     survivors = stillGood;
                 }
 
-                // Phase 3: publish the entries that passed. A commit can still report a conflict if a
-                // concurrent batch committed the same id with different content in the meantime.
-                foreach (var (index, typeId, _, token) in survivors)
+                // Phase 3: publish the entries that passed AS ONE ATOMIC UNIT. A per-entry commit loop could
+                // publish a dependent schema after a concurrent batch won its parent or $ref target id with
+                // different content than the dependent was validated against; the store-level batch
+                // compare-and-swap instead checks every target and publishes none if any conflicts.
+                var survivorTokens = survivors.Select(s => s.Token).ToList();
+                var outcomes = await registry.CommitStagedBatchAsync(survivorTokens).ConfigureAwait(false);
+                for (var s = 0; s < survivors.Count; s++)
                 {
-                    var outcome = await registry.CommitStagedAsync(token).ConfigureAwait(false);
-                    pending.Remove(token);
-                    if (outcome == GtsSaveOutcome.Conflict)
+                    var (index, typeId, _, token) = survivors[s];
+                    if (outcomes[s] == GtsSaveOutcome.Conflict)
                     {
+                        // Nothing was published for a conflicting entry; leave its token in `pending` so the
+                        // finally discards it (on a batch conflict the whole survivor set stays staged).
                         results[index] = new { ok = false, type_id = (string?)typeId, error = (string?)"Entity already exists with different content" };
                         allOk = false;
                     }
                     else
                     {
+                        pending.Remove(token);
                         results[index] = new { ok = true, type_id = (string?)typeId, error = (string?)null };
                     }
                 }

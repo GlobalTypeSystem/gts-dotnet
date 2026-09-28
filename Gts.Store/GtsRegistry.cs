@@ -66,13 +66,14 @@ public abstract class GtsRegistry
     }
 
     /// <summary>
-    /// Stages an entity WITHOUT publishing it (invisible to public reads until <see cref="CommitStagedAsync"/>),
-    /// returning a unique staging token. Used by validate=true registration so an entity that has not yet passed
-    /// validation is never observable, and so a batch can resolve intra-batch references regardless of order.
+    /// Stages an entity WITHOUT publishing it (invisible to public reads until it is committed), returning a
+    /// unique staging token. Used by validate=true registration so an entity that has not yet passed validation
+    /// is never observable. Passing a shared <paramref name="stagingSessionId"/> lets a batch resolve its own
+    /// intra-batch references regardless of order while staying isolated from other requests' staged entries.
     /// </summary>
-    public ValueTask<string> StageAsync(GtsJsonEntity entity)
+    public ValueTask<string> StageAsync(GtsJsonEntity entity, string? stagingSessionId = null)
     {
-        return _store.StageAsync(entity);
+        return _store.StageAsync(entity, stagingSessionId);
     }
 
     /// <summary>
@@ -84,6 +85,16 @@ public abstract class GtsRegistry
         return _store.CommitStagedAsync(token);
     }
 
+    /// <summary>
+    /// Atomically publishes a set of staged tokens all-or-nothing: if any target conflicts, nothing is
+    /// published. Returns one <see cref="GtsSaveOutcome"/> per token, positionally aligned with
+    /// <paramref name="tokens"/>. See <see cref="IGtsStore.CommitStagedBatchAsync"/>.
+    /// </summary>
+    public ValueTask<IReadOnlyList<GtsSaveOutcome>> CommitStagedBatchAsync(IReadOnlyList<string> tokens)
+    {
+        return _store.CommitStagedBatchAsync(tokens);
+    }
+
     /// <summary>Discards a staged entity by its staging token; the committed state is untouched.</summary>
     public ValueTask DiscardStagedAsync(string token)
     {
@@ -92,11 +103,13 @@ public abstract class GtsRegistry
 
     /// <summary>
     /// Returns a read-only snapshot of all entities without deep-cloning their content. The returned entities
-    /// must be treated as read-only; intended for internal read-only consumers such as validation.
+    /// must be treated as read-only; intended for internal read-only consumers such as validation. Committed
+    /// entities are overlaid only with the staged entries of <paramref name="stagingSessionId"/> (null =
+    /// committed-only), so one request never observes another's unvalidated staged entries.
     /// </summary>
-    public ValueTask<IReadOnlyList<GtsJsonEntity>> SnapshotForReadAsync()
+    public ValueTask<IReadOnlyList<GtsJsonEntity>> SnapshotForReadAsync(string? stagingSessionId = null)
     {
-        return _store.SnapshotForReadAsync();
+        return _store.SnapshotForReadAsync(stagingSessionId);
     }
 
     /// <summary>Returns the number of entities in the registry.</summary>
@@ -234,8 +247,9 @@ public abstract class GtsRegistry
         GtsId schemaTypeId,
         JsonObject schemaDocument,
         CancellationToken cancellationToken = default,
-        GtsRefValidationMode refValidationMode = GtsRefValidationModes.Default) =>
-        _schemaValidation.ValidateAsync(schemaTypeId, schemaDocument, cancellationToken, refValidationMode);
+        GtsRefValidationMode refValidationMode = GtsRefValidationModes.Default,
+        string? stagingSessionId = null) =>
+        _schemaValidation.ValidateAsync(schemaTypeId, schemaDocument, cancellationToken, refValidationMode, stagingSessionId);
 
     /// <summary>
     /// Validates a stored schema by type id (see <see cref="ValidateSchemaAsync(string, CancellationToken)"/>).
