@@ -17,6 +17,9 @@ internal static class GtsSchemaDocumentNormalizer
         return clone;
     }
 
+    internal static void RemoveDialectDeclarations(JsonObject root) =>
+        GtsSchemaWalker.Visit(root, static (schema, _) => schema.Remove("$schema"), includeTraitsSchema: true);
+
     internal static JsonObject ForJsonSchemaEvaluation(JsonObject root)
     {
         var clone = (JsonObject)root.DeepClone();
@@ -81,14 +84,9 @@ internal static class GtsSchemaDocumentNormalizer
                 // structural schema, so every value matches both and oneOf rejects everything.
                 // Evaluate such a oneOf as anyOf: exclusivity is enforced by GtsRefValidator.
                 //
-                // NOTE: gts-go and gts-rust avoid this rewrite by registering x-gts-ref as a real
-                // JSON Schema keyword/vocabulary, so the engine evaluates it during combinator
-                // resolution and oneOf "just works". JsonSchema.Net (this project's engine) exposes
-                // no public API to add a keyword to a built-in dialect — Dialect can only be built
-                // from a full IKeywordHandler list, and the built-in Draft-07/2019-09/2020-12 sets
-                // are not publicly enumerable — so we cannot follow that approach without reflecting
-                // into library internals. This localized normalization is the pragmatic alternative;
-                // gts-python and gts-ts use the keyword-registration approach their libraries support.
+                // NOTE: x-gts-ref is still enforced by GtsRefValidator rather than by the
+                // JsonSchema.Net dialect. This localized rewrite keeps oneOf branch behavior
+                // consistent until x-gts-ref is migrated to a first-class keyword handler.
                 var hadRef = branches.OfType<JsonObject>().Any(branch => branch.ContainsKey(GtsSchemaKeywords.Ref));
                 foreach (var child in branches)
                     StripXGtsRefDeep(child);

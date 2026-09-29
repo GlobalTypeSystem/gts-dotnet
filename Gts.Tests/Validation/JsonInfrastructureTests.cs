@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Gts.Store.Validation;
+using Json.Schema;
 
 namespace Gts.Tests.Validation;
 
@@ -32,6 +34,107 @@ public class JsonInfrastructureTests
 
         Assert.True(valid.IsValid);
         Assert.False(invalid.IsValid);
+    }
+
+    [Fact]
+    public void Schema_engine_ignores_pattern_keys_in_annotations()
+    {
+        var schema = JsonNode.Parse("""
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "examples": [{ "pattern": "[" }]
+            }
+            """)!.AsObject();
+
+        var result = GtsJsonSchemaEngine.Default.EvaluateInline(new JsonObject(), schema);
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void Schema_engine_only_matches_patterns_at_their_instance_location()
+    {
+        var schema = JsonNode.Parse("""
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "properties": {
+                "code": { "type": "string", "pattern": "(a+)+$" }
+              },
+              "additionalProperties": true
+            }
+            """)!.AsObject();
+        var instance = new JsonObject
+        {
+            ["code"] = "a",
+            ["description"] = new string('a', 40_000) + "!"
+        };
+
+        var result = GtsJsonSchemaEngine.Default.EvaluateInline(instance, schema);
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void Schema_engine_bounds_patterns_in_nested_resources()
+    {
+        var schema = JsonNode.Parse("""
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "properties": {
+                "code": {
+                  "$schema": "http://json-schema.org/draft-07/schema#",
+                  "type": "string",
+                  "pattern": "(a+)+$"
+                }
+              }
+            }
+            """)!.AsObject();
+        var instance = new JsonObject { ["code"] = new string('a', 40_000) + "!" };
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        Assert.Throws<RegexMatchTimeoutException>(() => GtsJsonSchemaEngine.Default.EvaluateInline(instance, schema));
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public void Schema_engine_validation_builds_standard_schema_locations()
+    {
+        var schema = JsonNode.Parse("""
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "$id": "gts://gts.x.regex._.invalid.v1~",
+              "definitions": {
+                "invalid": { "type": "string", "pattern": "[" }
+              },
+              "examples": [{ "pattern": "[" }]
+            }
+            """)!.AsObject();
+
+        Assert.Throws<JsonSchemaException>(() => GtsJsonSchemaEngine.Default.ValidateSchema(
+            GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(schema)));
+    }
+
+    [Fact]
+    public void Schema_engine_rejects_a_missing_dialect()
+    {
+        var schema = JsonNode.Parse("""{ "type": "object" }""")!.AsObject();
+
+        Assert.Throws<JsonSchemaException>(() => GtsJsonSchemaEngine.Default.EvaluateInline(new JsonObject(), schema));
+    }
+
+    [Theory]
+    [InlineData("http://json-schema.org/draft-06/schema#")]
+    [InlineData("https://json-schema.org/draft/2025-01/schema")]
+    [InlineData("https://json-schema.org/draft/2020-21/schema")]
+    [InlineData("https://example.invalid/schema")]
+    public void Schema_engine_rejects_an_unsupported_dialect(string dialect)
+    {
+        var schema = new JsonObject { ["$schema"] = dialect, ["type"] = "object" };
+
+        Assert.Throws<JsonSchemaException>(() => GtsJsonSchemaEngine.Default.EvaluateInline(new JsonObject(), schema));
     }
 
     [Theory]

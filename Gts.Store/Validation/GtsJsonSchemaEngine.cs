@@ -10,6 +10,9 @@ internal sealed class GtsJsonSchemaEngine : IGtsJsonSchemaEngine
 {
     internal static GtsJsonSchemaEngine Default { get; } = new();
 
+    private static readonly Dialect Draft07 = GtsRegexDialect.WithBoundedPatterns(Dialect.Draft07);
+    private static readonly Dialect Draft201909 = GtsRegexDialect.WithBoundedPatterns(Dialect.Draft201909);
+    private static readonly Dialect Draft202012 = GtsRegexDialect.WithBoundedPatterns(Dialect.Draft202012);
     private readonly ConcurrentDictionary<string, JsonSchema> _compiled = new(StringComparer.Ordinal);
     private readonly FormatRegistry _formats = GtsFormatRegistry.Create();
 
@@ -37,8 +40,24 @@ internal sealed class GtsJsonSchemaEngine : IGtsJsonSchemaEngine
     {
         var normalized = GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(schemaDocument);
         var fingerprint = Fingerprint("inline", new[] { normalized });
-        var schema = GetOrCompile(fingerprint, () => JsonSchema.FromText(normalized.ToJsonString(), BuildOptions(normalized, new SchemaRegistry())));
+        var schema = GetOrCompile(fingerprint, () => JsonSchema.FromText(WithoutDialectDeclaration(normalized).ToJsonString(), BuildOptions(normalized, new SchemaRegistry())));
         return schema.Evaluate(GtsJson.ToElement(instance), EvaluationOptions());
+    }
+
+    public void ValidateSchema(JsonObject normalizedSchemaDocument)
+    {
+        if (!GtsTypeSchema.TryGetSupportedDialect(normalizedSchemaDocument, out var dialect, out var error))
+            throw new JsonSchemaException(error!);
+        var metaSchema = dialect switch
+        {
+            "draft-07" => MetaSchemas.Draft7,
+            "2019-09" => MetaSchemas.Draft201909,
+            "2020-12" => MetaSchemas.Draft202012,
+            _ => throw new JsonSchemaException($"Unsupported JSON Schema dialect: {dialect}")
+        };
+        var result = metaSchema.Evaluate(GtsJson.ToElement(normalizedSchemaDocument), EvaluationOptions());
+        if (!result.IsValid)
+            throw new JsonSchemaException("JSON Schema validation failed: " + string.Join("; ", FlattenErrors(result)));
     }
 
     public IReadOnlyList<string> FlattenErrors(EvaluationResults results)
@@ -63,9 +82,9 @@ internal sealed class GtsJsonSchemaEngine : IGtsJsonSchemaEngine
         {
             if (!GtsSchemaResolutionUris.TryGetGtsId(uri, out var id) || !GtsId.TryParse(id, out var parsed) || parsed is null || !schemas.TryGetValue(parsed, out var document))
                 return null;
-            return JsonSchema.FromText(document.ToJsonString(), options, uri);
+            return JsonSchema.FromText(WithoutDialectDeclaration(document).ToJsonString(), options, uri);
         };
-        return JsonSchema.FromText(root.ToJsonString(), options, GtsSchemaResolutionUris.ToSyntheticUri(rootId.Id));
+        return JsonSchema.FromText(WithoutDialectDeclaration(root).ToJsonString(), options, GtsSchemaResolutionUris.ToSyntheticUri(rootId.Id));
     }
 
     private static BuildOptions BuildOptions(JsonObject schema, SchemaRegistry registry) => new()
@@ -83,14 +102,24 @@ internal sealed class GtsJsonSchemaEngine : IGtsJsonSchemaEngine
         FormatRegistry = _formats
     };
 
+    private static JsonObject WithoutDialectDeclaration(JsonObject schema)
+    {
+        var result = (JsonObject)schema.DeepClone();
+        GtsSchemaDocumentNormalizer.RemoveDialectDeclarations(result);
+        return result;
+    }
+
     private static Dialect DialectFor(JsonObject schema)
     {
-        var uri = schema["$schema"] is JsonValue value && value.TryGetValue<string>(out var s) ? s : null;
-        if (uri?.Contains("2020-12", StringComparison.Ordinal) == true)
-            return Dialect.Draft202012;
-        if (uri?.Contains("2019-09", StringComparison.Ordinal) == true)
-            return Dialect.Draft201909;
-        return Dialect.Draft07;
+        if (!GtsTypeSchema.TryGetSupportedDialect(schema, out var dialect, out var error))
+            throw new JsonSchemaException(error!);
+        return dialect switch
+        {
+            "draft-07" => Draft07,
+            "2019-09" => Draft201909,
+            "2020-12" => Draft202012,
+            _ => throw new JsonSchemaException($"Unsupported JSON Schema dialect: {dialect}")
+        };
     }
 
     private static string Fingerprint(string root, IEnumerable<JsonObject> schemas)

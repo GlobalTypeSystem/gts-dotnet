@@ -7,11 +7,12 @@ internal static class GtsSchemaDependencyGraph
 {
     internal static string Dialect(JsonObject schema)
     {
-        var value = schema["$schema"]?.GetValue<string>() ?? "http://json-schema.org/draft-07/schema#";
-        if (value.Contains("draft-07", StringComparison.Ordinal)) return "draft-07";
-        if (value.Contains("2019-09", StringComparison.Ordinal)) return "2019-09";
-        if (value.Contains("2020-12", StringComparison.Ordinal)) return "2020-12";
-        return value.TrimEnd('#');
+        var document = !schema.ContainsKey("$schema") && schema.ContainsKey("$$schema")
+            ? GtsSchemaDocumentNormalizer.CanonicalizeKeywords(schema)
+            : schema;
+        if (!GtsTypeSchema.TryGetSupportedDialect(document, out var dialect, out var error))
+            throw new InvalidOperationException(error);
+        return dialect;
     }
 
     internal static JsonObject Resolve(JsonObject schema, Func<GtsId, JsonObject?> load) => Resolve(schema, load, new HashSet<string>(), 0);

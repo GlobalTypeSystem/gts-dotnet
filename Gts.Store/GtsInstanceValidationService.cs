@@ -92,15 +92,25 @@ internal sealed class GtsInstanceValidationService(
         {
             // An untrusted schema `pattern` whose match exceeds the engine's
             // bounded time budget is reported as a validation failure rather
-            // than propagating a hang/exception. The JsonSchema.Net engine
-            // bounds match time; this mirrors the "regular expression match
-            // timed out" outcome the sibling runtimes surface (gts-go/gts-python).
+            // than propagating a hang/exception. The bounded regex preflight
+            // mirrors the "regular expression match timed out" outcome the
+            // sibling runtimes surface (gts-go/gts-python).
             return new GtsInstanceValidationResult
             {
                 Ok = false,
                 Id = instanceId,
                 FailureReason = GtsValidationFailure.SchemaValidationFailed,
                 SchemaErrors = new[] { "regular expression match timed out" }
+            };
+        }
+        catch (RegexParseException exception)
+        {
+            return new GtsInstanceValidationResult
+            {
+                Ok = false,
+                Id = instanceId,
+                FailureReason = GtsValidationFailure.SchemaValidationFailed,
+                SchemaErrors = new[] { $"invalid regular expression: {exception.Message}" }
             };
         }
     }

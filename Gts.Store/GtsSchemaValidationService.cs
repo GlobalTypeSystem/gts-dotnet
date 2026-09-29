@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Gts.Extraction;
 using Gts.Store.Validation;
+using Json.Schema;
 
 namespace Gts.Store;
 
@@ -61,6 +62,14 @@ internal sealed class GtsSchemaValidationService(IGtsStore store)
         {
             if (candidate.IsSchema && candidate.GtsId is not null)
                 schemaById[candidate.GtsId.Id] = candidate;
+        }
+        try
+        {
+            GtsJsonSchemaEvaluator.ValidateSchema(GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(document));
+        }
+        catch (Exception exception) when (exception is JsonSchemaException or ArgumentException)
+        {
+            return new GtsSchemaValidationResult { Ok = false, SchemaId = schemaId.Id, FailureReason = GtsValidationFailure.InvalidJsonSchema, Errors = new[] { exception.Message } };
         }
 
         JsonObject? Load(GtsId id)

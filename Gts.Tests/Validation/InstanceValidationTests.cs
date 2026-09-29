@@ -310,9 +310,9 @@ public class InstanceValidationTests
     {
         // An untrusted schema `pattern` that is a classic catastrophic-
         // backtracking regex, matched against an adversarial instance value,
-        // must not hang: JsonSchema.Net bounds regex match time, and the
-        // timeout is surfaced as a validation failure ("regular expression
-        // match timed out") rather than propagating - the same class of
+        // must not hang: the bounded regex preflight stops it before the
+        // JsonSchema.Net evaluation, surfacing "regular expression match timed
+        // out" as a validation failure rather than propagating - the same
         // protection gts-go and gts-python get from a match timeout.
         const string baseSchema = """
             {
@@ -359,8 +359,9 @@ public class InstanceValidationTests
         // The point is that validation *returns* (bounded), rather than pinning
         // a CPU forever. The adversarial value fails the pattern, so Ok is false.
         Assert.False(result.Ok);
+        Assert.Contains("regular expression match timed out", result.SchemaErrors ?? []);
         Assert.True(
-            stopwatch.Elapsed < TimeSpan.FromSeconds(60),
+            stopwatch.Elapsed < TimeSpan.FromSeconds(2),
             $"validation took {stopwatch.Elapsed}, expected a bounded match time");
     }
 }
