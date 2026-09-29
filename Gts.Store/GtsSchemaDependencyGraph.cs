@@ -10,9 +10,14 @@ internal static class GtsSchemaDependencyGraph
         var document = !schema.ContainsKey("$schema") && schema.ContainsKey("$$schema")
             ? GtsSchemaDocumentNormalizer.CanonicalizeKeywords(schema)
             : schema;
-        if (!GtsTypeSchema.TryGetSupportedDialect(document, out var dialect, out var error))
-            throw new InvalidOperationException(error);
-        return dialect;
+        // An unsupported or missing dialect is a validation concern, not an internal fault: the
+        // callers (ValidateDialects, HasMixedDialectReferences) compare dialects to detect a
+        // cross-dialect graph and report failures via their result/error channels. Returning a
+        // sentinel that can never equal a supported dialect keeps an unsupported referenced schema
+        // a reported mismatch instead of an exception that escapes the validator as an internal error.
+        return GtsTypeSchema.TryGetSupportedDialect(document, out var dialect, out _)
+            ? dialect
+            : "unsupported:" + (document["$schema"]?.ToJsonString() ?? "<missing>");
     }
 
     internal static JsonObject Resolve(JsonObject schema, Func<GtsId, JsonObject?> load) => Resolve(schema, load, new HashSet<string>(), 0);
