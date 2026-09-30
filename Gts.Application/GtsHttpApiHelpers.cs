@@ -15,12 +15,11 @@ public static partial class GtsHttpApiExtensions
         return 0;
     }
 
-    internal static string NormalizeDialect(string? dialect)
+    internal static string NormalizeDialect(string? declared)
     {
-        if (dialect?.Contains("draft-07", StringComparison.Ordinal) == true) return "draft-07";
-        if (dialect?.Contains("2019-09", StringComparison.Ordinal) == true) return "2019-09";
-        if (dialect?.Contains("2020-12", StringComparison.Ordinal) == true) return "2020-12";
-        return dialect?.TrimEnd('#') ?? "draft-07";
+        return GtsTypeSchema.TryNormalizeSupportedDialect(declared, out var dialect, out _)
+            ? dialect
+            : "unsupported:" + (declared ?? "<missing>");
     }
 
     internal static bool ContainsSchemaKeyword(JsonNode? node, string keyword) => node switch

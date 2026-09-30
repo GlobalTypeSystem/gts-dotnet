@@ -16,5 +16,8 @@ internal static class GtsJsonSchemaEvaluator
     internal static EvaluationResults EvaluateInline(JsonNode? instance, JsonObject schemaDocument) =>
         Engine.EvaluateInline(instance, schemaDocument);
 
+    internal static void ValidateSchema(JsonObject normalizedSchemaDocument) =>
+        Engine.ValidateSchema(normalizedSchemaDocument);
+
     internal static IReadOnlyList<string> FlattenErrors(EvaluationResults results) => Engine.FlattenErrors(results);
 }

@@ -55,10 +55,10 @@ internal static class GtsFormatRegistry
     {
         try
         {
-            _ = new Regex(value, RegexOptions.ECMAScript);
+            _ = new Regex(value, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
             return true;
         }
-        catch
+        catch (ArgumentException)
         {
             return false;
         }

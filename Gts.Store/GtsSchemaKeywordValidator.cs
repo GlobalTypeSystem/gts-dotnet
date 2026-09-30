@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Gts.Store.Validation;
 
 namespace Gts.Store;
 
@@ -12,7 +13,7 @@ public static class GtsSchemaKeywordValidator
     public static IReadOnlyList<string> Validate(JsonObject schema)
     {
         var errors = new List<string>();
-        ValidateNode(schema, true, errors);
+        GtsSchemaWalker.Visit(schema, (node, root) => ValidateNode(node, root, errors));
         if (schema[GtsSchemaKeywords.Final] is JsonNode final && !TryBoolean(final, out _))
             errors.Add("x-gts-final must be a boolean");
         if (schema[GtsSchemaKeywords.Abstract] is JsonNode abstractNode && !TryBoolean(abstractNode, out _))
@@ -38,41 +39,6 @@ public static class GtsSchemaKeywordValidator
             if (!root && TopLevel.Contains(key))
                 errors.Add($"{key} must be at the schema top level");
         }
-
-        RecurseMap(schema["properties"], errors);
-        RecurseMap(schema["patternProperties"], errors);
-        RecurseMap(schema["definitions"], errors);
-        RecurseMap(schema["$defs"], errors);
-        RecurseMap(schema["dependentSchemas"], errors);
-        foreach (var key in new[] { "additionalProperties", "additionalItems", "contains", "not", "if", "then", "else", "propertyNames", "unevaluatedProperties", "unevaluatedItems" })
-            Recurse(schema[key], errors);
-        foreach (var key in new[] { "allOf", "anyOf", "oneOf", "prefixItems" })
-            RecurseArray(schema[key], errors);
-        Recurse(schema["items"], errors);
-    }
-
-    private static void RecurseMap(JsonNode? node, List<string> errors)
-    {
-        if (node is not JsonObject map)
-            return;
-        foreach (var child in map.Select(property => property.Value).OfType<JsonObject>())
-            ValidateNode(child, false, errors);
-    }
-
-    private static void RecurseArray(JsonNode? node, List<string> errors)
-    {
-        if (node is not JsonArray array)
-            return;
-        foreach (var child in array.OfType<JsonObject>())
-            ValidateNode(child, false, errors);
-    }
-
-    private static void Recurse(JsonNode? node, List<string> errors)
-    {
-        if (node is JsonObject child)
-            ValidateNode(child, false, errors);
-        else
-            RecurseArray(node, errors);
     }
 
     private static bool TryBoolean(JsonNode? node, out bool value)

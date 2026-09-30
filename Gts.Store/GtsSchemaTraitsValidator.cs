@@ -260,15 +260,11 @@ internal static class GtsSchemaTraitsValidator
         }
     }
 
-    private static string NormalizeDialect(string? dialect)
+    private static string NormalizeDialect(string? declared)
     {
-        if (dialect?.Contains("draft-07", StringComparison.Ordinal) == true)
-            return "draft-07";
-        if (dialect?.Contains("2019-09", StringComparison.Ordinal) == true)
-            return "2019-09";
-        if (dialect?.Contains("2020-12", StringComparison.Ordinal) == true)
-            return "2020-12";
-        return dialect?.TrimEnd('#') ?? "draft-07";
+        return GtsTypeSchema.TryNormalizeSupportedDialect(declared, out var dialect, out _)
+            ? dialect
+            : "unsupported:" + (declared ?? "<missing>");
     }
 
     private static bool ContainsGtsRef(JsonNode? node) => node switch

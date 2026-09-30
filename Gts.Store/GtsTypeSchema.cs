@@ -32,6 +32,19 @@ public static class GtsTypeSchema
             return false;
         }
 
+        return TryNormalizeSupportedDialect(declared, out dialect, out error);
+    }
+
+    public static bool TryNormalizeSupportedDialect(string? declared, out string dialect, out string? error)
+    {
+        dialect = "";
+        error = null;
+        if (string.IsNullOrWhiteSpace(declared))
+        {
+            error = "$schema must declare a supported JSON Schema dialect";
+            return false;
+        }
+
         var normalized = declared.Replace("https://", "http://", StringComparison.Ordinal).TrimEnd('#');
         switch (normalized)
         {

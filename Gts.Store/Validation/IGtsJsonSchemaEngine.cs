@@ -9,5 +9,7 @@ internal interface IGtsJsonSchemaEngine
 
     EvaluationResults EvaluateInline(JsonNode? instance, JsonObject schemaDocument);
 
+    void ValidateSchema(JsonObject normalizedSchemaDocument);
+
     IReadOnlyList<string> FlattenErrors(EvaluationResults results);
 }
