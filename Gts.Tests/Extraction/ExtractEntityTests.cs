@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Nodes;
+using System.Text.Json.Nodes;
 using Gts.Extraction;
 
 namespace Gts.Tests.Extraction;
