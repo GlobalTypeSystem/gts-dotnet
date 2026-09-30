@@ -43,16 +43,17 @@ jobs:
           git config --global core.eol lf
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           clean: 'true'
+          persist-credentials: false
 
       # Install the .NET 8 SDK for the net8.0 target. global.json intentionally
       # stays permissive ("8.0.0" + rollForward=latestMajor, i.e. "min .NET 8,
       # use whatever newer SDK is present"); that pin is not a downloadable
       # build, so we install an 8.0 SDK explicitly rather than via global.json.
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '8.0.x'
 
@@ -83,10 +84,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '8.0.x'
 
@@ -103,10 +106,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '8.0.x'
 
@@ -116,7 +121,7 @@ jobs:
 
       # Upload to Codecov; do not fail CI if Codecov is down/misconfigured.
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@0f8570b1a125f4937846a11fcfa3bcd548bd8c97 # v4.6.0
         with:
           files: '**/coverage.cobertura.xml'
           fail_ci_if_error: false
@@ -127,10 +132,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '8.0.x'
 
