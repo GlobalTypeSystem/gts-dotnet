@@ -48,7 +48,15 @@ internal sealed class GtsCastService(IGtsStore store)
                 ? CanonicalSchema(stored.Content)
                 : null;
         }
-        var targetEffective = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(GtsSchemaDependencyGraph.Resolve(targetDocument, Load));
+        JsonObject targetEffective;
+        try
+        {
+            targetEffective = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(GtsSchemaDependencyGraph.Resolve(targetDocument, Load));
+        }
+        catch (GtsSchemaTooLargeException)
+        {
+            return new GtsInstanceCastResult { Ok = false, InstanceId = id, FromSchemaId = sourceSchemaId, ToSchemaId = targetSchemaId, FailureReason = GtsValidationFailure.SchemaNormalizationFailed, Comparison = comparison };
+        }
         var casted = GtsInstanceCast.CastToEffectiveSchema(entity.Content, targetEffective);
         var schemas = entities.Where(candidate => candidate.IsSchema && candidate.GtsId is not null)
             .ToDictionary(candidate => candidate.GtsId!, candidate => GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(candidate.Content));

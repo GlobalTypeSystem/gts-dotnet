@@ -12,6 +12,19 @@ public static class GtsSchemaDerivationValidator
         Func<GtsId, JsonObject?> tryLoadTypeSchema)
     {
         var errors = new List<string>();
+        try
+        {
+            WalkChain(derivedId, derivedSchema, tryLoadTypeSchema, errors);
+        }
+        catch (GtsSchemaTooLargeException exception)
+        {
+            errors.Add(exception.Message);
+        }
+        return (errors.Count == 0, errors);
+    }
+
+    private static void WalkChain(GtsId derivedId, JsonObject derivedSchema, Func<GtsId, JsonObject?> tryLoadTypeSchema, List<string> errors)
+    {
         var currentId = derivedId.Id;
         var currentSchema = derivedSchema;
 
@@ -50,11 +63,15 @@ public static class GtsSchemaDerivationValidator
             ValidateRedeclarations(parentFlat, Flatten(currentSchema), "", errors);
             ValidateClosedBranches(parentFlat, currentSchema, "", errors);
 
+            // OP#12 must preserve Valid(derived) ⊆ Valid(base) on the reference dimension (§9.6.1):
+            // the derived property's kind-filtered scope / pattern coverage must be included in the
+            // base's. Unknown fails closed. `/$id` resolves in each schema's own context.
+            if (GtsRefScopeCompat.SchemaRefRelation(resolvedParent, resolvedChild, parentIdStr, currentId) != GtsRefScopeCompat.Relation.Included)
+                errors.Add($"Derived schema '{currentId}' narrows or alters a GTS reference constraint of precedent '{parentIdStr}' in a way that is not provably within the base's accepted set");
+
             currentId = parentIdStr;
             currentSchema = parentSchema;
         }
-
-        return (errors.Count == 0, errors);
     }
 
     internal static JsonObject ResolveForEvaluation(JsonObject schema, Func<GtsId, JsonObject?> loadSchema) =>
@@ -188,7 +205,7 @@ public static class GtsSchemaDerivationValidator
                     targetProperties[name] = merged;
                 }
                 else
-                    targetProperties[name] = property?.DeepClone();
+                    targetProperties[name] = property is JsonObject propObj ? Flatten(propObj) : property?.DeepClone();
             }
             target["properties"] = targetProperties;
             return;
@@ -234,6 +251,9 @@ public static class GtsSchemaDerivationValidator
         }
         if (parent is not JsonObject parentObject || child is not JsonObject childObject)
             return;
+
+        parentObject = Flatten(parentObject);
+        childObject = Flatten(childObject);
 
         ValidateTypes(parentObject, childObject, path, errors);
         ValidateEnumAndConst(parentObject, childObject, path, errors);

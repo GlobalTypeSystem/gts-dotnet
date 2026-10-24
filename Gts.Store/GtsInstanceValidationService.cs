@@ -73,9 +73,9 @@ internal sealed class GtsInstanceValidationService(
                 ? GtsSchemaDocumentNormalizer.CanonicalizeKeywords(loaded)
                 : loaded;
         }
-        var effectiveSchema = GtsSchemaDependencyGraph.Resolve(schemaDocument, Load);
         try
         {
+            var effectiveSchema = GtsSchemaDependencyGraph.Resolve(schemaDocument, Load);
             var evaluation = GtsJsonSchemaEvaluator.Evaluate(content, schemaId, schemas);
             var referenceErrors = GtsRefValidator.ValidateInstance(content, effectiveSchema, schemaId.Id, entities, refValidationMode);
             if (evaluation.IsValid && referenceErrors.Count == 0)
@@ -86,6 +86,16 @@ internal sealed class GtsInstanceValidationService(
                 Id = instanceId,
                 FailureReason = referenceErrors.Count > 0 ? GtsValidationFailure.GtsRefValidationFailed : GtsValidationFailure.SchemaValidationFailed,
                 SchemaErrors = referenceErrors.Count > 0 ? referenceErrors : GtsJsonSchemaEvaluator.FlattenErrors(evaluation)
+            };
+        }
+        catch (GtsSchemaTooLargeException exception)
+        {
+            return new GtsInstanceValidationResult
+            {
+                Ok = false,
+                Id = instanceId,
+                FailureReason = GtsValidationFailure.SchemaValidationFailed,
+                SchemaErrors = new[] { exception.Message }
             };
         }
         catch (RegexMatchTimeoutException)
