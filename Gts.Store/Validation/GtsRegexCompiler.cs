@@ -32,12 +32,19 @@ internal static class GtsRegexCompiler
     /// repeated to the expanded-length bound, each a code-point alternation), above the engine
     /// default (1,000 on .NET 8, 10,000 on .NET 9+).
     /// </summary>
-    private const int MaxAutomataSize = GtsRegexProfile.MaxExpandedLen * 10;
+    internal const int MaxAutomataSize = GtsRegexProfile.MaxExpandedLen * 10;
 
-    static GtsRegexCompiler()
+    static GtsRegexCompiler() => ApplyAutomataLimit();
+
+    /// <summary>
+    /// Sets the engine's automaton limit to <see cref="MaxAutomataSize"/> unless the host configured
+    /// one. The engine reads the switch on every construction and honors only a positive
+    /// <see cref="int"/>, so that is what counts as a host setting; a host limit is kept even when
+    /// lower, and expressions over it are reported as unsupported by <see cref="Compile"/>.
+    /// </summary>
+    internal static void ApplyAutomataLimit()
     {
-        // Read on every construction; raised only, so a larger host setting is kept.
-        if (AppContext.GetData(MaxAutomataSizeSwitch) is not int configured || configured < MaxAutomataSize)
+        if (AppContext.GetData(MaxAutomataSizeSwitch) is not int configured || configured <= 0)
             AppContext.SetData(MaxAutomataSizeSwitch, MaxAutomataSize);
     }
 
@@ -60,7 +67,7 @@ internal static class GtsRegexCompiler
             {
                 return new Regex(Translate(expr), RegexOptions.NonBacktracking | RegexOptions.CultureInvariant);
             }
-            // NotSupportedException: the estimated automaton exceeds MaxAutomataSize.
+            // NotSupportedException: the estimated automaton exceeds the configured limit.
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
             {
                 throw new GtsRegexException(

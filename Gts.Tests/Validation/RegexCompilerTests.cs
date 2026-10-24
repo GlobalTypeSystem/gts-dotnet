@@ -46,4 +46,26 @@ public class RegexCompilerTests
             AppContext.SetData(MaxAutomataSizeSwitch, configured);
         }
     }
+
+    [Theory]
+    [InlineData(100, 100)]
+    [InlineData(100_000, 100_000)]
+    [InlineData(null, GtsRegexCompiler.MaxAutomataSize)]
+    [InlineData(0, GtsRegexCompiler.MaxAutomataSize)]
+    [InlineData("100", GtsRegexCompiler.MaxAutomataSize)]
+    public void A_host_automaton_limit_is_kept(object? hostLimit, int expected)
+    {
+        var configured = AppContext.GetData(MaxAutomataSizeSwitch);
+        AppContext.SetData(MaxAutomataSizeSwitch, hostLimit);
+        try
+        {
+            GtsRegexCompiler.ApplyAutomataLimit();
+
+            Assert.Equal(expected, AppContext.GetData(MaxAutomataSizeSwitch));
+        }
+        finally
+        {
+            AppContext.SetData(MaxAutomataSizeSwitch, configured);
+        }
+    }
 }
