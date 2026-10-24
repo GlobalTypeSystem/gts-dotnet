@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Gts.Store.Validation;
 using Json.Schema;
 
@@ -95,7 +94,11 @@ public class JsonInfrastructureTests
         var instance = new JsonObject { ["code"] = new string('a', 40_000) + "!" };
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        Assert.Throws<RegexMatchTimeoutException>(() => GtsJsonSchemaEngine.Default.EvaluateInline(instance, schema));
+        // Under the GTS regex profile (v0.15) '(a+)+$' is in profile and is matched in linear
+        // time by a non-backtracking engine, so evaluation returns quickly (no timeout). The
+        // adversarial value ends in '!', so the anchored pattern does not match.
+        var result = GtsJsonSchemaEngine.Default.EvaluateInline(instance, schema);
+        Assert.False(result.IsValid);
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
     }
 

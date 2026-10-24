@@ -51,18 +51,7 @@ internal static class GtsFormatRegistry
         return !match.Groups[5].Success || int.Parse(match.Groups[5].Value) <= 23 && int.Parse(match.Groups[6].Value) <= 59;
     }
 
-    private static bool IsRegex(string value)
-    {
-        try
-        {
-            _ = new Regex(value, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
-            return true;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-    }
+    private static bool IsRegex(string value) => GtsRegexCompiler.IsSupported(value);
 
     private sealed class PredicateFormat(string key, Func<string, bool> predicate) : Format(key)
     {

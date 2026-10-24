@@ -357,9 +357,11 @@ public class InstanceValidationTests
         stopwatch.Stop();
 
         // The point is that validation *returns* (bounded), rather than pinning
-        // a CPU forever. The adversarial value fails the pattern, so Ok is false.
+        // a CPU forever. Under the GTS regex profile (v0.15) the expression is in
+        // profile and runs in linear time via a non-backtracking engine, so it no
+        // longer times out: the adversarial value simply fails the pattern.
         Assert.False(result.Ok);
-        Assert.Contains("regular expression match timed out", result.SchemaErrors ?? []);
+        Assert.Contains(result.SchemaErrors ?? [], error => error.Contains("pattern", StringComparison.Ordinal));
         Assert.True(
             stopwatch.Elapsed < TimeSpan.FromSeconds(2),
             $"validation took {stopwatch.Elapsed}, expected a bounded match time");
