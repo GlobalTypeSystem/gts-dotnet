@@ -150,8 +150,7 @@ public static class GtsQuery
 
     internal static bool IdMatches(GtsId id, GtsParsedQuery q) =>
         q.IsWildcard
-            ? id.Matches(q.BasePattern) && (!q.BasePattern.EndsWith("~*", StringComparison.Ordinal) ||
-                                           id.Segments.Count > q.BasePattern[..^1].Count(character => character == '~'))
+            ? GtsPattern.TryParse(q.BasePattern, out var pattern) && pattern!.Matches(id)
             : string.Equals(id.Id, q.BasePattern, StringComparison.Ordinal);
 
     private static Dictionary<string, string> ParseFilters(string? filterPart)
