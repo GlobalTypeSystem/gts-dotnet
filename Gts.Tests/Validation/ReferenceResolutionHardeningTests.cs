@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Gts.Extraction;
 using Gts.Store;
+using Gts.Store.Validation;
 
 namespace Gts.Tests.Validation;
 
@@ -86,6 +87,47 @@ public class ReferenceResolutionHardeningTests
 
         Assert.Empty(ValidateInstance($$"""{ "child": { "child": { "id": "{{TargetId}}" } } }""", schema));
         Assert.NotEmpty(ValidateInstance("""{ "child": { "child": { "id": "gts.x.test.hardening.other.v1~" } } }""", schema));
+    }
+
+    private const string InstanceId = "gts.x.test.hardening.target.v1~x.test.hardening.item.v1";
+
+    // Both sides of instance validation: the JSON Schema engine and the reference walk.
+    private static bool Accepts(string instance, string schema) =>
+        GtsJsonSchemaEvaluator.EvaluateInline(Parse(instance), GtsSchemaDocumentNormalizer.ForJsonSchemaEvaluation(Parse(schema))).IsValid
+        && ValidateInstance(instance, schema).Count == 0;
+
+    [Fact]
+    public void Inactive_conditional_branch_does_not_check_reference_candidates()
+    {
+        var schema = $$"""
+            {
+              "$schema": "{{Draft07}}",
+              "if": { "properties": { "kind": { "const": "type" } } },
+              "then": { "properties": { "ref": { "x-gts-type-ref": "{{TargetId}}" } } },
+              "else": { "properties": { "ref": { "x-gts-instance-ref": "{{TargetId}}*" } } }
+            }
+            """;
+
+        Assert.True(Accepts($$"""{ "kind": "instance", "ref": "{{InstanceId}}" }""", schema));
+        Assert.True(Accepts($$"""{ "kind": "type", "ref": "{{TargetId}}" }""", schema));
+        Assert.False(Accepts($$"""{ "kind": "type", "ref": "{{InstanceId}}" }""", schema));
+    }
+
+    [Theory]
+    [InlineData("""{ "required": ["extra"] }""")]
+    [InlineData("false")]
+    public void Reference_condition_selects_the_branch_that_applies(string thenSchema)
+    {
+        var schema = $$"""
+            {
+              "$schema": "{{Draft07}}",
+              "if": { "properties": { "ref": { "x-gts-type-ref": "{{TargetId}}" } } },
+              "then": {{thenSchema}}
+            }
+            """;
+
+        Assert.False(Accepts($$"""{ "ref": "{{TargetId}}" }""", schema));
+        Assert.True(Accepts("""{ "ref": "gts.x.test.hardening.other.v1~" }""", schema));
     }
 
     [Fact]

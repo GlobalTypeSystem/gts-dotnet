@@ -267,9 +267,26 @@ public static class GtsRefValidator
                 errors.Add($"{path}: not: reference constraint unexpectedly satisfied");
         }
 
-        foreach (var keyword in new[] { "if", "then", "else" })
-            if (obj[keyword] is JsonObject conditional && ContainsReferenceKeyword(conditional))
-                WalkInstance(instance, conditional, root, selectedTypeId, context, mode, path, errors, new HashSet<string>(localRefs), depth + 1);
+        // `if` selects the branch that applies; its own failures are not errors. Only the active
+        // branch is checked. A reference-bearing `if` hides the whole conditional from the JSON
+        // Schema engine (GtsSchemaDocumentNormalizer), so the active branch's structural part is
+        // checked here too.
+        if (obj["if"] is { } ifSchema && (ContainsReferenceKeyword(ifSchema) || ContainsReferenceKeyword(obj["then"]) || ContainsReferenceKeyword(obj["else"])))
+        {
+            var ifErrors = new List<string>();
+            WalkInstance(instance, ifSchema, root, selectedTypeId, context, mode, path, ifErrors, new HashSet<string>(localRefs), depth + 1);
+            var conditionHolds = ifSchema switch
+            {
+                JsonObject ifObject => ifErrors.Count == 0 && StructurallyAccepts(instance, ifObject, root),
+                JsonValue value => value.TryGetValue<bool>(out var holds) && holds,
+                _ => false,
+            };
+            var branchKeyword = conditionHolds ? "then" : "else";
+            var branch = obj[branchKeyword];
+            WalkInstance(instance, branch, root, selectedTypeId, context, mode, path, errors, new HashSet<string>(localRefs), depth + 1);
+            if (ContainsReferenceKeyword(ifSchema) && !BranchStructurallyAccepts(instance, branch, root))
+                errors.Add($"{path}: {branchKeyword}: value does not match the branch selected by a reference condition");
+        }
 
         if (instance is JsonObject instanceObject)
             WalkObject(instanceObject, obj, root, selectedTypeId, context, mode, path, errors, localRefs, depth);
@@ -461,6 +478,18 @@ public static class GtsRefValidator
             return true;
         }
     }
+
+    /// <summary>
+    /// <see cref="StructurallyAccepts"/> for a conditional branch, which may be absent (accepts) or
+    /// a boolean schema.
+    /// </summary>
+    private static bool BranchStructurallyAccepts(JsonNode? instance, JsonNode? branch, JsonObject root) => branch switch
+    {
+        null => true,
+        JsonObject branchObject => StructurallyAccepts(instance, branchObject, root),
+        JsonValue value => value.TryGetValue<bool>(out var accepts) && accepts,
+        _ => false,
+    };
 
     /// <summary>Whether a schema node carries any of the three reference keywords (directly or nested).</summary>
     private static bool ContainsReferenceKeyword(JsonNode? node) => node switch

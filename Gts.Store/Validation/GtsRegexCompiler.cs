@@ -23,6 +23,24 @@ internal static class GtsRegexCompiler
 {
     private static readonly ConcurrentDictionary<string, Regex> Cache = new(StringComparer.Ordinal);
 
+    /// <summary>AppContext switch for the largest automaton the NonBacktracking engine builds.</summary>
+    private const string MaxAutomataSizeSwitch = "REGEX_NONBACKTRACKING_MAX_AUTOMATA_SIZE";
+
+    /// <summary>
+    /// Estimated automaton nodes the engine must accept for every expression within the profile
+    /// bounds, with headroom: the largest translations measured need about 12,200 (<c>.</c>
+    /// repeated to the expanded-length bound, each a code-point alternation), above the engine
+    /// default (1,000 on .NET 8, 10,000 on .NET 9+).
+    /// </summary>
+    private const int MaxAutomataSize = GtsRegexProfile.MaxExpandedLen * 10;
+
+    static GtsRegexCompiler()
+    {
+        // Read on every construction; raised only, so a larger host setting is kept.
+        if (AppContext.GetData(MaxAutomataSizeSwitch) is not int configured || configured < MaxAutomataSize)
+            AppContext.SetData(MaxAutomataSizeSwitch, MaxAutomataSize);
+    }
+
     /// <summary>
     /// Compiles <paramref name="expression"/> for matching, throwing when it is unsupported or the
     /// engine cannot build it.
@@ -42,7 +60,8 @@ internal static class GtsRegexCompiler
             {
                 return new Regex(Translate(expr), RegexOptions.NonBacktracking | RegexOptions.CultureInvariant);
             }
-            catch (Exception ex) when (ex is ArgumentException or RegexParseException)
+            // NotSupportedException: the estimated automaton exceeds MaxAutomataSize.
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
             {
                 throw new GtsRegexException(
                     GtsRegexProfile.Describe(expr, $"engine failed to compile it: {ex.Message}"));

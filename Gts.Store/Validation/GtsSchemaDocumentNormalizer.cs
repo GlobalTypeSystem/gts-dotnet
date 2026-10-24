@@ -100,6 +100,15 @@ internal static class GtsSchemaDocumentNormalizer
                 }
             }
         }
+        // A conditional whose `if` carries a reference keyword is dropped from the engine's view for
+        // the same reason as `not` below: stripped, `if` would hold for every value and `then` would
+        // always apply. GtsRefValidator selects and checks the active branch instead.
+        if (ContainsReferenceKeyword(obj["if"]))
+        {
+            obj.Remove("if");
+            obj.Remove("then");
+            obj.Remove("else");
+        }
         foreach (var keyword in new[] { "items", "additionalItems", "additionalProperties", "contains", "not", "if", "then", "else" })
         {
             if (obj[keyword] is not JsonObject child)
