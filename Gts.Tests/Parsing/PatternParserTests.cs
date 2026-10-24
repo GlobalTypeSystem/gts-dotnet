@@ -1,4 +1,4 @@
-﻿using Gts.Parsing;
+using Gts.Parsing;
 using Pidgin;
 
 namespace Gts.Tests.Parsing;
