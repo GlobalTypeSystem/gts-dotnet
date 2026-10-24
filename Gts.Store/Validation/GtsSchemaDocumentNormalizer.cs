@@ -65,7 +65,8 @@ internal static class GtsSchemaDocumentNormalizer
     {
         if (node is not JsonObject obj)
             return;
-        obj.Remove(GtsSchemaKeywords.Ref);
+        foreach (var refKeyword in GtsSchemaKeywords.ReferenceKeywords)
+            obj.Remove(refKeyword);
         foreach (var keyword in new[] { "properties", "patternProperties", "definitions", "$defs", "dependentSchemas" })
         {
             if (obj[keyword] is JsonObject map)
@@ -87,7 +88,7 @@ internal static class GtsSchemaDocumentNormalizer
                 // NOTE: x-gts-ref is still enforced by GtsRefValidator rather than by the
                 // JsonSchema.Net dialect. This localized rewrite keeps oneOf branch behavior
                 // consistent until x-gts-ref is migrated to a first-class keyword handler.
-                var hadRef = branches.OfType<JsonObject>().Any(branch => branch.ContainsKey(GtsSchemaKeywords.Ref));
+                var hadRef = branches.OfType<JsonObject>().Any(branch => GtsSchemaKeywords.ReferenceKeywords.Any(branch.ContainsKey));
                 foreach (var child in branches)
                     StripXGtsRefDeep(child);
                 if (branches.Count > 0 && branches.All(branch => branch is JsonObject branchObject && branchObject.Count == 0))
@@ -99,12 +100,37 @@ internal static class GtsSchemaDocumentNormalizer
                 }
             }
         }
+        // A conditional whose `if` carries a reference keyword is dropped from the engine's view for
+        // the same reason as `not` below: stripped, `if` would hold for every value and `then` would
+        // always apply. GtsRefValidator selects and checks the active branch instead.
+        if (ContainsReferenceKeyword(obj["if"]))
+        {
+            obj.Remove("if");
+            obj.Remove("then");
+            obj.Remove("else");
+        }
         foreach (var keyword in new[] { "items", "additionalItems", "additionalProperties", "contains", "not", "if", "then", "else" })
         {
-            if (obj[keyword] is JsonObject child)
-                StripXGtsRefDeep(child);
+            if (obj[keyword] is not JsonObject child)
+                continue;
+            var hadRef = ContainsReferenceKeyword(child);
+            StripXGtsRefDeep(child);
+            // `not` whose subschema carries a reference keyword is dropped from the engine's view:
+            // the engine cannot see reference keywords, so a negated subschema like
+            // {"type":"string","x-gts-pattern-ref":...} would collapse to "not a string" and reject
+            // every string. GtsRefValidator applies the full `not` inversion (including the
+            // structural part that only constrains strings) against the unstripped schema instead.
+            if (keyword == "not" && hadRef)
+                obj.Remove("not");
         }
     }
+
+    private static bool ContainsReferenceKeyword(JsonNode? node) => node switch
+    {
+        JsonObject obj => GtsSchemaKeywords.ReferenceKeywords.Any(obj.ContainsKey) || obj.Any(property => ContainsReferenceKeyword(property.Value)),
+        JsonArray array => array.Any(ContainsReferenceKeyword),
+        _ => false,
+    };
 
     private static void RewriteGtsUrisDeep(JsonNode? node)
     {

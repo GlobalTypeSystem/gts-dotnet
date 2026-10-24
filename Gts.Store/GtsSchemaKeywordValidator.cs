@@ -10,10 +10,14 @@ public static class GtsSchemaKeywordValidator
         GtsSchemaKeywords.Final, GtsSchemaKeywords.Abstract, GtsSchemaKeywords.Traits, GtsSchemaKeywords.TraitsSchema
     ];
 
+    // Property-level GTS keywords that are part of the supported vocabulary (§9.6). Any other
+    // `x-gts-*` key (including the removed `x-gts-ref`) is an unknown keyword and rejected (§11.0).
+    private static readonly HashSet<string> Recognized = [.. GtsSchemaKeywords.ReferenceKeywords];
+
     public static IReadOnlyList<string> Validate(JsonObject schema)
     {
         var errors = new List<string>();
-        GtsSchemaWalker.Visit(schema, (node, root) => ValidateNode(node, root, errors));
+        GtsSchemaWalker.Visit(schema, (node, root) => ValidateNode(node, root, errors), includeTraitsSchema: true);
         if (schema[GtsSchemaKeywords.Final] is JsonNode final && !TryBoolean(final, out _))
             errors.Add("x-gts-final must be a boolean");
         if (schema[GtsSchemaKeywords.Abstract] is JsonNode abstractNode && !TryBoolean(abstractNode, out _))
@@ -34,7 +38,7 @@ public static class GtsSchemaKeywordValidator
 
         foreach (var key in schema.Select(property => property.Key))
         {
-            if (key.StartsWith(GtsSchemaKeywords.Prefix, StringComparison.Ordinal) && key != GtsSchemaKeywords.Ref && !TopLevel.Contains(key))
+            if (key.StartsWith(GtsSchemaKeywords.Prefix, StringComparison.Ordinal) && !Recognized.Contains(key) && !TopLevel.Contains(key))
                 errors.Add($"Unsupported GTS extension keyword: {key}");
             if (!root && TopLevel.Contains(key))
                 errors.Add($"{key} must be at the schema top level");
