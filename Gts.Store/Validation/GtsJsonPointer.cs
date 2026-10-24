@@ -5,6 +5,10 @@ namespace Gts.Store.Validation;
 
 internal static class GtsJsonPointer
 {
+    /// <summary>Escapes a single reference token for use in a JSON Pointer (<c>~</c>→<c>~0</c>, <c>/</c>→<c>~1</c>).</summary>
+    internal static string Escape(string segment) =>
+        segment.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
+
     internal static bool TryEvaluate(JsonNode? root, string reference, out JsonNode? result)
     {
         result = null;

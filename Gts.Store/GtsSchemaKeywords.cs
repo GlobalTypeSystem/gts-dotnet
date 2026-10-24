@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace Gts.Store;
 
 /// <summary>
@@ -9,8 +11,17 @@ public static class GtsSchemaKeywords
     /// <summary>Common prefix shared by every GTS schema extension keyword.</summary>
     public const string Prefix = "x-gts-";
 
-    /// <summary><c>x-gts-ref</c>: constrains a string value to a GTS identifier matching a pattern (§9.6).</summary>
-    public const string Ref = "x-gts-ref";
+    /// <summary><c>x-gts-type-ref</c>: constrains a string to a GTS Type Identifier (§9.6.1).</summary>
+    public const string TypeRef = "x-gts-type-ref";
+
+    /// <summary><c>x-gts-instance-ref</c>: constrains a string to a GTS Instance Identifier (§9.6.1).</summary>
+    public const string InstanceRef = "x-gts-instance-ref";
+
+    /// <summary><c>x-gts-pattern-ref</c>: constrains a string holding a GTS identifier pattern (§9.6.2).</summary>
+    public const string PatternRef = "x-gts-pattern-ref";
+
+    /// <summary>The three GTS identifier-reference keywords (§9.6). Immutable: shared process-wide.</summary>
+    public static readonly ImmutableArray<string> ReferenceKeywords = [TypeRef, InstanceRef, PatternRef];
 
     /// <summary><c>x-gts-final</c>: marks a type schema as non-derivable.</summary>
     public const string Final = "x-gts-final";

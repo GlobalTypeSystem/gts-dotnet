@@ -257,20 +257,11 @@ public static partial class GtsHttpApiExtensions
         {
             var id = gts_id ?? "";
             var isWildcard = id.Contains('*', StringComparison.Ordinal);
-            if (isWildcard)
-            {
-                if (id.Count(c => c == '*') != 1 || !id.EndsWith('*'))
-                    return Results.Json(new { id, valid = false, error = "Invalid wildcard pattern", is_wildcard = true });
-                var pr = GtsId.TryParsePattern(id, out var pat);
-                if (pr && pat is not null)
-                    return Results.Json(new { id, valid = true, error = "", is_wildcard = true });
-                return Results.Json(new { id, valid = false, error = "Invalid wildcard pattern", is_wildcard = true });
-            }
-
-            if (GtsId.TryParse(id, out var parsed) && parsed is not null && (parsed.IsType || parsed.Segments.Count > 1))
-                return Results.Json(new { id, valid = true, error = "", is_wildcard = false });
-
-            return Results.Json(new { id, valid = false, error = "Invalid GTS id", is_wildcard = false });
+            // The §10 engine enforces syntax, spelling, the 1024-char limit, unsigned 32-bit version
+            // bounds, and the issue-#37 single-segment-instance rule for both concrete ids and patterns.
+            if (GtsPattern.TryParse(id, out _))
+                return Results.Json(new { id, valid = true, error = "", is_wildcard = isWildcard });
+            return Results.Json(new { id, valid = false, error = isWildcard ? "Invalid wildcard pattern" : "Invalid GTS id", is_wildcard = isWildcard });
         });
 
         app.MapPost("/extract-id", async (HttpRequest req) =>
@@ -293,60 +284,40 @@ public static partial class GtsHttpApiExtensions
         {
             var id = gts_id ?? "";
             var isWildcard = id.Contains('*', StringComparison.Ordinal);
-            if (isWildcard)
-            {
-                if (id.Count(c => c == '*') == 1 && id.EndsWith('*') && GtsId.TryParsePattern(id, out var pat) && pat is not null)
-                {
-                    var wildcardIsSchema = id.EndsWith(".*", StringComparison.Ordinal) ||
-                                           id.EndsWith("~*", StringComparison.Ordinal);
-                    return Results.Json(new
-                    {
-                        id,
-                        ok = true,
-                        segments = pat.Segments.Select(GtsSegmentDto.FromSegment).ToList(),
-                        error = "",
-                        is_wildcard = true,
-                        is_type = wildcardIsSchema
-                    });
-                }
-
+            if (!GtsPattern.TryParse(id, out var pattern))
                 return Results.Json(new
                 {
                     id,
                     ok = false,
                     segments = Array.Empty<object>(),
-                    error = "Invalid pattern",
-                    is_wildcard = true,
-                    is_type = false
-                });
-            }
-
-            if (!GtsId.TryParse(id, out var gid) || gid is null)
-                return Results.Json(new
-                {
-                    id,
-                    ok = false,
-                    segments = Array.Empty<object>(),
-                    error = "Parse error",
-                    is_wildcard = false,
+                    error = isWildcard ? "Invalid pattern" : "Parse error",
+                    is_wildcard = isWildcard,
                     is_type = false
                 });
 
+            var isType = isWildcard
+                ? id.EndsWith(".*", StringComparison.Ordinal) || id.EndsWith("~*", StringComparison.Ordinal)
+                : id.EndsWith('~');
             return Results.Json(new
             {
                 id,
                 ok = true,
-                segments = gid.Segments.Select(GtsSegmentDto.FromSegment).ToList(),
+                segments = pattern!.Segments.Select(GtsSegmentDto.FromSegment).ToList(),
                 error = "",
-                is_wildcard = false,
-                is_type = gid.IsType
+                is_wildcard = isWildcard,
+                is_type = isType
             });
         });
 
+        // OP#4 identifier matching (README §10): a concrete candidate matches when it is in the
+        // filter's selected set; a pattern candidate matches when the filter covers it.
         app.MapGet("/match-id-pattern", (string candidate, string pattern) =>
-            GtsId.TryMatch(candidate, pattern, out var match)
-                ? Results.Json(new { candidate, pattern, match })
-                : Results.Json(new { candidate, pattern, match = false, error = "Invalid candidate or pattern" }));
+        {
+            if (!GtsPattern.TryParse(pattern, out var filter) || !GtsPattern.TryParse(candidate, out var cand))
+                return Results.Json(new { candidate, pattern, match = false, error = "Invalid candidate or pattern" });
+            var match = cand!.HasWildcard ? filter!.Covers(cand) : filter!.MatchesCandidate(candidate);
+            return Results.Json(new { candidate, pattern, match });
+        });
 
         app.MapGet("/uuid", (string gts_id) =>
         {

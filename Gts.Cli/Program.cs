@@ -253,42 +253,27 @@ Examples:
             return 2;
         }
 
+        // The §10 engine enforces syntax, spelling, the 1024-char limit, unsigned 32-bit version
+        // bounds and the single-segment-instance rule for both concrete ids and patterns, matching
+        // the HTTP /validate-id endpoint.
         var isWildcard = id.Contains('*', StringComparison.Ordinal);
-        if (isWildcard)
-        {
-            var pr = GtsId.TryParsePattern(id, out var pat);
-            if (!pr || pat is null)
-            {
-                WriteJson(new
-                {
-                    id,
-                    valid = false,
-                    is_schema = false,
-                    is_wildcard = true,
-                    error = $"Unable to validate GTS ID '{id}': Invalid wildcard pattern"
-                });
-                return 0;
-            }
-
-            var isSchema = id.EndsWith("~*", StringComparison.Ordinal) || id.EndsWith(".*", StringComparison.Ordinal);
-            WriteJson(new { id, valid = true, is_schema = isSchema, is_wildcard = true, error = "" });
-            return 0;
-        }
-
-        if (!GtsId.TryParse(id, out var gid) || gid is null)
+        if (!GtsPattern.TryParse(id, out _))
         {
             WriteJson(new
             {
                 id,
                 valid = false,
                 is_schema = false,
-                is_wildcard = false,
-                error = $"Unable to validate GTS ID '{id}': Invalid GTS id"
+                is_wildcard = isWildcard,
+                error = $"Unable to validate GTS ID '{id}': {(isWildcard ? "Invalid wildcard pattern" : "Invalid GTS id")}"
             });
             return 0;
         }
 
-        WriteJson(new { id, valid = true, is_schema = gid.IsType, is_wildcard = false, error = "" });
+        var isSchema = isWildcard
+            ? id.EndsWith("~*", StringComparison.Ordinal) || id.EndsWith(".*", StringComparison.Ordinal)
+            : id.EndsWith('~');
+        WriteJson(new { id, valid = true, is_schema = isSchema, is_wildcard = isWildcard, error = "" });
         return 0;
     }
 
@@ -302,56 +287,30 @@ Examples:
         }
 
         var isWildcard = id.Contains('*', StringComparison.Ordinal);
-        if (isWildcard)
-        {
-            if (!GtsId.TryParsePattern(id, out var pat) || pat is null)
-            {
-                WriteJson(new
-                {
-                    id,
-                    ok = false,
-                    is_wildcard = true,
-                    is_schema = false,
-                    segments = (object?)null,
-                    error = "Invalid pattern"
-                });
-                return 0;
-            }
-
-            var wildcardIsSchema = id.EndsWith(".*", StringComparison.Ordinal) || id.EndsWith("~*", StringComparison.Ordinal);
-            WriteJson(new
-            {
-                id,
-                ok = true,
-                is_wildcard = true,
-                is_schema = wildcardIsSchema,
-                segments = pat.Segments.Select(GtsSegmentDto.FromSegment).ToList(),
-                error = ""
-            });
-            return 0;
-        }
-
-        if (!GtsId.TryParse(id, out var gid) || gid is null)
+        if (!GtsPattern.TryParse(id, out var pattern))
         {
             WriteJson(new
             {
                 id,
                 ok = false,
-                is_wildcard = false,
+                is_wildcard = isWildcard,
                 is_schema = false,
                 segments = (object?)null,
-                error = "Parse error"
+                error = isWildcard ? "Invalid pattern" : "Parse error"
             });
             return 0;
         }
 
+        var isSchema = isWildcard
+            ? id.EndsWith(".*", StringComparison.Ordinal) || id.EndsWith("~*", StringComparison.Ordinal)
+            : id.EndsWith('~');
         WriteJson(new
         {
             id,
             ok = true,
-            is_wildcard = false,
-            is_schema = gid.IsType,
-            segments = gid.Segments.Select(GtsSegmentDto.FromSegment).ToList(),
+            is_wildcard = isWildcard,
+            is_schema = isSchema,
+            segments = pattern!.Segments.Select(GtsSegmentDto.FromSegment).ToList(),
             error = ""
         });
         return 0;
@@ -367,35 +326,17 @@ Examples:
             return 2;
         }
 
-        try
+        // OP#4 (README §10): a concrete candidate matches when it is in the filter's selected set;
+        // a pattern candidate matches when the filter covers it. Shared with HTTP /match-id-pattern.
+        if (!GtsPattern.TryParse(pattern, out var filter) || !GtsPattern.TryParse(candidate, out var cand))
         {
-            if (candidate.Contains('*', StringComparison.Ordinal))
-            {
-                if (!GtsId.TryParsePattern(candidate, out var cPat) || cPat is null ||
-                    !GtsId.TryParsePattern(pattern, out var pPat) || pPat is null)
-                {
-                    WriteJson(new { candidate, pattern, match = false, error = "invalid pattern" });
-                    return 0;
-                }
-
-                WriteJson(new { candidate, pattern, match = cPat.Matches(pPat), error = "" });
-                return 0;
-            }
-
-            if (!GtsId.TryParse(candidate, out var cId) || cId is null)
-            {
-                WriteJson(new { candidate, pattern, match = false, error = "invalid candidate" });
-                return 0;
-            }
-
-            WriteJson(new { candidate, pattern, match = cId.Matches(pattern), error = "" });
+            WriteJson(new { candidate, pattern, match = false, error = "invalid candidate or pattern" });
             return 0;
         }
-        catch (Exception ex)
-        {
-            WriteJson(new { candidate, pattern, match = false, error = ex.Message });
-            return 0;
-        }
+
+        var match = cand!.HasWildcard ? filter!.Covers(cand) : filter!.MatchesCandidate(candidate);
+        WriteJson(new { candidate, pattern, match, error = "" });
+        return 0;
     }
 
     private static int RunUuid(string[] args)

@@ -81,6 +81,12 @@ internal sealed class GtsSchemaValidationService(IGtsStore store)
                 : entity.Content;
         }
 
+        // Check every regular expression against the GTS profile across the reachable schema graph,
+        // including `$ref` targets that JSON-Schema compilation resolves only lazily (README §11.0.1).
+        var regexError = GtsSchemaRegexValidator.Check(document, Load);
+        if (regexError is not null)
+            return new GtsSchemaValidationResult { Ok = false, SchemaId = schemaId.Id, FailureReason = GtsValidationFailure.InvalidJsonSchema, Errors = new[] { regexError } };
+
         var (derivationValid, derivationErrors) = GtsSchemaDerivationValidator.ValidateAgainstRegistry(schemaId, document, Load);
         if (!derivationValid)
             return new GtsSchemaValidationResult { Ok = false, SchemaId = schemaId.Id, FailureReason = GtsValidationFailure.PrecedentIncompatible, Errors = new[] { "Derived schema is not compatible with base: " + string.Join("; ", derivationErrors) } };

@@ -39,22 +39,47 @@ internal static class GtsOperationEndpoints
         var registered = await registry.GetAllAsync().ConfigureAwait(false);
         var schemas = registered.Where(entity => entity.IsSchema && entity.GtsId is not null)
             .ToDictionary(entity => entity.GtsId!.Id, entity => entity.Content, StringComparer.Ordinal);
-        var oldFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(GtsHttpApiExtensions.ResolveSchemaRefs(oldEntity.Content, schemas, new HashSet<string>()));
-        var newFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(GtsHttpApiExtensions.ResolveSchemaRefs(newEntity.Content, schemas, new HashSet<string>()));
+        var oldResolved = GtsHttpApiExtensions.ResolveSchemaRefs(oldEntity.Content, schemas, new HashSet<string>());
+        var newResolved = GtsHttpApiExtensions.ResolveSchemaRefs(newEntity.Content, schemas, new HashSet<string>());
+        var oldFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(oldResolved);
+        var newFlat = GtsJsonSchemaEvolutionCompatibility.FlattenSchema(newResolved);
         var (backward, backwardErrors, forward, forwardErrors) = GtsSchemaCompatibilityService.CompareEvolution(oldFlat, newFlat);
+
+        // Fold in the GTS reference dimension (§9.6.1): backward needs Valid(old) ⊆ Valid(new) and
+        // forward needs Valid(new) ⊆ Valid(old). An unprovable inclusion is reported as "unknown".
+        var refBackward = GtsRefScopeCompat.SchemaRefRelation(newResolved, oldResolved, null, null);
+        var refForward = GtsRefScopeCompat.SchemaRefRelation(oldResolved, newResolved, null, null);
+        var backwardStatus = CombineStatus(backward, refBackward);
+        var forwardStatus = CombineStatus(forward, refForward);
+        var fullStatus = CombineFull(backwardStatus, forwardStatus);
         return Results.Json(new
         {
             old = oldTypeId,
             @new = newTypeId,
-            backward_compatibility = backward ? "compatible" : "incompatible",
-            forward_compatibility = forward ? "compatible" : "incompatible",
-            full_compatibility = backward && forward ? "compatible" : "incompatible",
-            is_backward_compatible = backward,
-            is_forward_compatible = forward,
-            is_fully_compatible = backward && forward,
+            backward_compatibility = backwardStatus,
+            forward_compatibility = forwardStatus,
+            full_compatibility = fullStatus,
+            is_backward_compatible = backwardStatus == "compatible",
+            is_forward_compatible = forwardStatus == "compatible",
+            is_fully_compatible = fullStatus == "compatible",
             backward_errors = backwardErrors,
             forward_errors = forwardErrors
         });
+    }
+
+    /// <summary>Combines a structural verdict with the three-valued reference relation (§9.6.1).</summary>
+    private static string CombineStatus(bool structurallyCompatible, GtsRefScopeCompat.Relation reference)
+    {
+        if (!structurallyCompatible || reference == GtsRefScopeCompat.Relation.Excluded)
+            return "incompatible";
+        return reference == GtsRefScopeCompat.Relation.Unknown ? "unknown" : "compatible";
+    }
+
+    private static string CombineFull(string backward, string forward)
+    {
+        if (backward == "incompatible" || forward == "incompatible")
+            return "incompatible";
+        return backward == "unknown" || forward == "unknown" ? "unknown" : "compatible";
     }
 
     private static async Task<IResult> Cast(HttpRequest request, GtsRegistry registry)
